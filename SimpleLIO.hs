@@ -452,8 +452,8 @@ mintSecPrivTCB (SecLabel ps) = SecPrivTCB ps
 
 instance PublicAction SecLabel where publicLabel = secLabel []
 
-runSetExample :: (Show a) => LIO SecLabel a -> IO ()
-runSetExample = runExample
+runSecExample :: (Show a) => LIO SecLabel a -> IO ()
+runSecExample = runExample
 
 -- Alice and Bob
 alice       = secLabel [ "Alice" ]
@@ -468,7 +468,7 @@ topSecret  = secLabel [ "TopSecret" , "Classified" ]
 classified = secLabel [ "Classified" ]
 public     = secLabel [ ]
 
-setExample0 = runSetExample $ return
+secExample0 = runSecExample $ return
   [ public     `canFlowTo` topSecret
   , classified `canFlowTo` classified 
   , classified `canFlowTo` topSecret 
@@ -476,14 +476,13 @@ setExample0 = runSetExample $ return
   , classified `canFlowTo` public
   , topSecret  `canFlowTo` classified ]
 
-setExample1 = runSetExample $ return
+secExample1 = runSecExample $ return
   [ canFlowToP (mintSecPrivTCB topSecret ) topSecret  public
   , canFlowToP (mintSecPrivTCB topSecret ) classified public
   , canFlowToP (mintSecPrivTCB classified) classified public
   , canFlowToP (mintSecPrivTCB classified) topSecret  public ]
 
-
-setExample0' = runSetExample $ return
+secExample0' = runSecExample $ return
   [ alice       `canFlowTo` aliceAndBob
   , bob         `canFlowTo` aliceAndBob
   , aliceAndBob `canFlowTo` alice
@@ -491,14 +490,14 @@ setExample0' = runSetExample $ return
   , alice       `canFlowTo` bob
   , bob         `canFlowTo` alice ]
 
-setExample1' = runSetExample $ return
+secExample1' = runSecExample $ return
   [ canFlowToP bobPriv   aliceAndBob alice
   , canFlowToP alicePriv aliceAndBob bob
   , canFlowToP alicePriv alice       bob
   , canFlowToP bobPriv   bob         alice
   ]
 
-setExample2 = runSetExample $ do
+secExample2 = runSecExample $ do
   putStrLn "Hello public world!"
   raiseLabel alice
   putStrLnP alicePriv "hey!"
@@ -508,7 +507,7 @@ setExample2 = runSetExample $ do
 -- Hey!
 -- *** Exception: user error (insufficient privs)
 
-setExample3 = runSetExample $ do
+secExample3 = runSecExample $ do
   putStrLn "Hello public world!"
   raiseLabel alice
   putStrLnP alicePriv "hey!"
@@ -519,7 +518,7 @@ setExample3 = runSetExample $ do
 -- *** Exception: user error (insufficient privs)
   where allPrivs  = mintSecPrivTCB $ alice `lub` bob
 
-setExample4 = runSetExample $ do
+secExample4 = runSecExample $ do
   secretVar <- newEmptyLMVar alice
   -- First thread:
   forkLIO $ do
@@ -597,7 +596,7 @@ queryDB db prin = do
     Just s' -> do r <- unlabel s'
                   return r
 
-setExample9 = runSetExample $ do
+secExample9 = runSecExample $ do
   db <- newLMVarP NoPriv public $ Map.empty
   -- First alice thread:
   forkLIO $ do
@@ -622,13 +621,175 @@ setExample9 = runSetExample $ do
 ----------------------------------------------------------------------
 -- Integrity (presented as a pure-integrity sets-of-principals model)
 
--- (Maybe we want to rename the SecLabel model to something like
--- Readers so that this can have the same representation but a
--- different name and a different behavior for the operations)
 
--- TODO: integrity examples
+-- TrustLabel is a label model representing the set of principals that
+-- endorsed/wrote the data. Hence, an "integrity/Trust label".
+newtype TrustLabel = TrustLabel (Set Principal)
+                     deriving (Eq, Ord, Show)
 
 
+-- Create a label from a list of principals
+trustLabel :: [Principal] -> TrustLabel
+trustLabel = TrustLabel . Set.fromList
+
+instance Label TrustLabel where
+  -- Information can from one entitty to another only if the data
+  -- becomes less trustworthy, i.e., there are more principals 
+  -- that could have created this data.
+  --
+  -- We threat the empty set as the set of all principals, i.e., data that
+  -- could have been created by anybody.
+  (TrustLabel s1) `canFlowTo` (TrustLabel s2) =
+     Set.null s2 || if Set.null s1
+                      then False
+                      else s1 `Set.isSubsetOf` s2
+
+  -- Combining data from two entities means that the new data is less
+  -- trustworthy and thus could contain information from either entity.
+  (TrustLabel s1) `lub` (TrustLabel s2) =
+     if Set.null s1 || Set.null s2
+       then trustLabel []
+       else TrustLabel $ s2 `Set.union` s2
+
+-- | When the privilege corresponds to a single principal this means
+-- that we can "speak on behalf of" a principal, i.e., we can endorse
+-- the data of this principal.
+--
+-- However, when the privilege is a set of principals, this is a
+-- "delegated" privilege and we can only endorse data at this level.
+-- That is, the privilege is strictly less powerful than a singleton.
+data TrustPriv = TrustPrivTCB (Set Principal)
+  deriving Show
+
+-- The "downgrade" for trust labels simply means returning the element
+-- that is closest to the bottom of the lattice given the supplied
+-- privileges. Since the trust label does not have a well-defined glb
+-- (greatest lower bound), this definition also only makes sense in
+-- certain cases. 
+--
+-- (DCLabels' trust/integrity components are CNF and thus does not
+-- have this problem.)
+
+instance Priv TrustLabel TrustPriv where
+  downgradeP (TrustPrivTCB p) l@(TrustLabel s) = 
+    if Set.null glb'
+      then l
+      else TrustLabel glb'
+    where glb' = p `Set.intersection` s
+  canFlowToP (TrustPrivTCB p) l1 l2 = 
+    l1 `canFlowTo` l2 || TrustLabel p `canFlowTo` l2
+
+instance PublicAction TrustLabel where publicLabel = trustLabel []
+
+runTrustExample :: (Show a) => LIO TrustLabel a -> IO ()
+runTrustExample = runExample
+
+mintTrustPrivTCB :: TrustLabel -> TrustPriv
+mintTrustPrivTCB (TrustLabel ps) = TrustPrivTCB ps
+
+-- Alice and Bob
+tAlice      = trustLabel [ "Alice" ]
+tBob        = trustLabel [ "Bob" ]
+tAliceOrBob = trustLabel [ "Alice", "Bob" ]
+tCarlaOrDan = trustLabel [ "Carla", "Dan" ]
+
+tAlicePriv      = mintTrustPrivTCB tAlice
+tBobPriv        = mintTrustPrivTCB tBob
+tAliceOrBobPriv = mintTrustPrivTCB tAliceOrBob
+tCarlaOrDanPriv = mintTrustPrivTCB tCarlaOrDan
+
+-- Encoding the Public/Classified/TopSecret label model
+tTopSecret  = trustLabel [ "TopSecret" ]
+tClassified = trustLabel [ "TopSecret", "Classified" ]
+tPublic     = trustLabel [ ] -- Alt: ["TopSecret", "Classified", "Public" ]
+
+tTopSecretPriv  = mintTrustPrivTCB tTopSecret
+tClassifiedPriv = mintTrustPrivTCB tClassified
+tPublicPriv     = mintTrustPrivTCB tPublic
+
+trustExample0 = runTrustExample $ return
+  [ tPublic     `canFlowTo` tTopSecret
+  , tClassified `canFlowTo` tClassified 
+  , tClassified `canFlowTo` tTopSecret 
+  , tTopSecret  `canFlowTo` tPublic
+  , tClassified `canFlowTo` tPublic
+  , tTopSecret  `canFlowTo` tClassified ]
+
+trustExample1 = runTrustExample $ return
+  [ canFlowToP (mintTrustPrivTCB tTopSecret ) tPublic tTopSecret 
+  , canFlowToP (mintTrustPrivTCB tTopSecret ) tPublic tClassified
+  , canFlowToP (mintTrustPrivTCB tClassified) tPublic tClassified 
+  , canFlowToP (mintTrustPrivTCB tClassified) tPublic tTopSecret ]
+
+trustExample0' = runTrustExample $ return
+  [ tAlice       `canFlowTo` tAliceOrBob
+  , tBob         `canFlowTo` tAliceOrBob
+  , tAliceOrBob  `canFlowTo` tAlice
+  , tAliceOrBob  `canFlowTo` tBob
+  , tAlice       `canFlowTo` tBob
+  , tBob         `canFlowTo` tAlice 
+  , tCarlaOrDan  `canFlowTo` tAliceOrBob 
+  ]
+
+trustExample1' = runTrustExample $ return
+  [ canFlowToP tAlicePriv      tAliceOrBob tAlice
+  , canFlowToP tBobPriv        tAliceOrBob tBob
+  , canFlowToP tBobPriv        tAlice      tBob
+  , canFlowToP tAlicePriv      tBob        tAlice
+  , canFlowToP tAliceOrBobPriv tCarlaOrDan tAliceOrBob 
+  , canFlowToP tCarlaOrDanPriv tCarlaOrDan tAliceOrBob 
+  ]
+
+--
+-- LIORef with privs (here since class is in session)
+--
+
+newLIORefP :: Priv l p => p -> l -> a -> LIO l (LIORef l a)
+newLIORefP p l x = do
+  guardWriteP p l
+  ref <- liftIOTCB $ newIORef x
+  return $ LIORefTCB l ref
+
+readLIORefP :: Priv l p => p -> LIORef l a -> LIO l a
+readLIORefP p (LIORefTCB l ref) = do
+  raiseLabelP p l
+  liftIOTCB $ readIORef ref
+
+writeLIORefP :: Priv l p => p -> LIORef l a -> a -> LIO l ()
+writeLIORefP p (LIORefTCB l ref) x = do
+  guardWriteP p l
+  liftIOTCB $ writeIORef ref x
+
+trustExample6 = runTrustExample $ do
+  aliceSecret <- newLIORefP tAlicePriv tAlice ""
+  -- as alice:
+  do putStrLn "<alice<"
+     secret <- getLine
+     writeLIORefP tAlicePriv aliceSecret secret
+  -- as the messenger:
+  msg <- readLIORef aliceSecret
+  putStrLn $ "Intercepted message: " ++ show msg
+  writeLIORef aliceSecret $ msg ++ " is corrupt"
+
+-- Above, the messanger is able to intercept the message, but when it
+-- tries to update the reference with a new message (as to corrupt the
+-- ref content), an exception is raised.
+
+trustExample7 = runTrustExample $ do
+  sharedSecret <- newLIORefP tAlicePriv tAliceOrBob ""
+  -- as alice:
+  do putStrLn "<alice<"
+     secret <- getLine
+     writeLIORefP tAlicePriv sharedSecret secret
+  -- as bbob
+  do putStrLn "<bob<"
+     secret <- getLine
+     existing <- readLIORef sharedSecret
+     writeLIORefP tBobPriv sharedSecret $ show [existing, secret]
+  -- as the messenger:
+  msg <- readLIORef sharedSecret
+  putStrLn $ "Intercepted message: " ++ show msg
+  writeLIORef sharedSecret $ msg ++ " is corrupt"
 
 ----------------------------------------------------------------------
 -- DC labels
