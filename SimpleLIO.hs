@@ -15,6 +15,8 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar
 import Data.Set (Set)
 import qualified Data.Set as Set
+import Data.Map (Map)
+import qualified Data.Map as Map
 import Data.IORef
 import qualified System.IO as IO
 
@@ -489,26 +491,38 @@ setExample8 = runSetExample $ do
   -- Second thread:
   forkLIO $ do
     raiseLabel bob
-    putStrLnP (SetPrivTCB bob) "I'll wait for a message from Alice"
-    secret <- takeLMVarP (SetPrivTCB bob) secretVar
-    return ()
-    -- putStrLnP bobPriv secret -- This will fail!
+    let bobPriv = SetPrivTCB bob
+    putStrLnP bobPriv "I'll wait for a message from Alice"
+    secret <- takeLMVarP bobPriv secretVar
+    putStrLnP bobPriv secret -- This will fail!
 
 
 ----------------------------------------------------------------------
 -- Labeled values
 
+-- Up to this point, we've assumed that a thread's current label
+-- applies to all of the data that that thread might ever send or
+-- write.  But there are situations where a thread may handle secrets
+-- without "looking at them" (i.e., without making control decisions
+-- based on secret information) or where we will want to combine
+-- information with different secrecy labels in the same data
+-- structure.  For example, we might want to create a database (a
+-- single data structure) in which we can store secrets belonging to
+-- both Alice and Bob.  We want Alice to be able to read Alice's
+-- secrets and Bob to be able to read Bob's secrets, but not vice
+-- versa.
+--
+-- To this end, we introduce a new type of "labeled values" -- i.e.,
+-- Haskell values carrying an information-flow label restricting their
+-- use.
+
 data Labeled l t = LabeledTCB l t
 
--- label requires value label to be above current label
+-- `label` requires the value label to be above the current label
 label :: Label l => l -> a -> LIO l (Labeled l a)
 label l x = do
   guardWrite l
   return $ LabeledTCB l x
-
--- `labelOf` returns the label of a labeled value
-labelOf  :: Labeled l a -> l
-labelOf (LabeledTCB l x) = l
 
 -- `unlabel` raises current label to (old current label `lub` value label)
 unlabel :: (Label l) => Labeled l a -> LIO l a
@@ -522,9 +536,41 @@ unlabelP p (LabeledTCB l x) = do
   raiseLabel (downgradeP p l)
   return x
 
--- TODO: Refine the DB example so that a single MVar holds a secret
--- for alice and a secret for bob
+-- `labelOf` extracts the label from a labeled value
+labelOf  :: Labeled l a -> l
+labelOf (LabeledTCB l x) = l
 
+-- For example, suppose DB is a type of very simple databases holding
+-- a map from principal names to labeled values (in the example,
+-- databases will hold a secret for alice and a secret for bob)...
+
+type DB l = Map Principal (Labeled l String)
+
+updateDB :: Label l => LMVar l (DB l) -> Principal -> String -> l -> LIO l ()
+updateDB db prin s l = do
+  m <- takeLMVarP NoPriv db
+  v <- label l s
+  putLMVarP NoPriv db $ Map.insert prin v m
+
+queryDB :: Label l => LMVar l (DB l) -> Principal -> l -> LIO l String
+queryDB db prin l = do
+  m <- takeLMVarP NoPriv db
+  putLMVarP NoPriv db m
+  case Map.lookup prin m of
+    Nothing -> return ""
+    Just s' -> do r <- unlabel s'
+                  return r
+
+setExample9 = runSetExample $ do
+  db <- newEmptyLMVarP NoPriv public
+  -- First thread:
+  forkLIO $ do
+    raiseLabel alice
+    undefined
+  -- Second thread:
+  forkLIO $ do
+    raiseLabel bob
+    undefined
 
 ----------------------------------------------------------------------
 -- Integrity (presented as a pure-integrity sets-of-principals model)
