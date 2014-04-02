@@ -414,8 +414,9 @@ type Principal = String
 newtype SecLabel = SecLabel (Set Principal)
                    deriving (Eq, Ord, Show)
 
-fromList :: [Principal] -> SecLabel
-fromList = SecLabel . Set.fromList
+-- Create a label from a list of principals
+secLabel :: [Principal] -> SecLabel
+secLabel = SecLabel . Set.fromList
 
 instance Label SecLabel where
   -- Information can from one entitty to another only if the data
@@ -449,23 +450,23 @@ instance Priv SecLabel SecPriv where
 mintSecPrivTCB :: SecLabel -> SecPriv
 mintSecPrivTCB (SecLabel ps) = SecPrivTCB ps
 
-instance PublicAction SecLabel where publicLabel = fromList []
+instance PublicAction SecLabel where publicLabel = secLabel []
 
 runSetExample :: (Show a) => LIO SecLabel a -> IO ()
 runSetExample = runExample
 
 -- Alice and Bob
-alice       = fromList [ "Alice" ]
-bob         = fromList [ "Bob" ]
-aliceAndBob = fromList [ "Alice", "Bob" ]
+alice       = secLabel [ "Alice" ]
+bob         = secLabel [ "Bob" ]
+aliceAndBob = secLabel [ "Alice", "Bob" ]
 
 alicePriv = mintSecPrivTCB alice
 bobPriv   = mintSecPrivTCB bob
 
 -- Encoding the Public/Classified/TopSecret label model
-topSecret  = fromList [ "TopSecret" , "Classified" ]
-classified = fromList [ "Classified" ]
-public     = fromList [ ]
+topSecret  = secLabel [ "TopSecret" , "Classified" ]
+classified = secLabel [ "Classified" ]
+public     = secLabel [ ]
 
 setExample0 = runSetExample $ return
   [ public     `canFlowTo` topSecret
