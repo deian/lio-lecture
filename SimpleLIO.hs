@@ -5,6 +5,7 @@
 
 import Data.Set (Set)
 import qualified Data.Set as Set
+import qualified System.IO as IO
 
 ----------------------------------------------------------------------
 -- Labels
@@ -13,6 +14,7 @@ class (Eq l, Show l) => Label l where
     -- Relation that dictates how information flows
     canFlowTo :: l -> l -> Bool
     lub :: l -> l -> l -- Least upper bound
+    public :: l -- the default label
 
 data SimpleLabel = Public | Classified | TopSecret 
                    deriving (Eq, Ord, Show)
@@ -20,6 +22,7 @@ data SimpleLabel = Public | Classified | TopSecret
 instance Label SimpleLabel where
   x `canFlowTo` y = x <= y
   lub = max
+  public = Public
 
 -- examples
 
@@ -69,7 +72,7 @@ instance Monad (LIO l) where
 
   a >>= f = LIO $ \l -> do (r,l') <- unLIO a l
                            unLIO (f r) l'
-                           
+
 {- 
 initCurLabel :: LIOState MilLabel
 initCurLabel = 
@@ -92,8 +95,28 @@ main = do
 
 -}
 
--- simplified version of the LIO monad
+-- The next two functions are intended only for use by the internals
+-- of the LIO library.  In a real implementation we'd use modules to
+-- control their visibility.  For today, we'll just be careful where
+-- we use them.
+guardIO :: Label l => l -> l -> LIO l ()
+guardIO lmin lmax = 
+  LIO $ \l -> if lmin `canFlowTo` l && l `canFlowTo` lmax 
+              then return ((),l) 
+              else error "foo"
 
+liftIO :: Label l => IO a -> LIO l a
+liftIO a = LIO $ \l -> do r <- a
+                          return (r,l)
+
+-- Now we use these functions to carefully lift certain operations
+-- from IO to LIO, equipping the raw IO operations with appropriate
+-- information-flow policies...
+
+putStrLn :: Label l => String -> LIO l ()
+putStrLn s = do guardIO public public
+                liftIO $ IO.putStrLn s
+  
 
 -- labeled values
 
