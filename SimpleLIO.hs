@@ -26,7 +26,6 @@ class (Eq l, Show l) => Label l where
     -- Relation that dictates how information flows
     canFlowTo :: l -> l -> Bool
     lub :: l -> l -> l -- Least upper bound
-    public :: l -- the default label
 
 data SimpleLabel = Public | Classified | TopSecret 
                    deriving (Eq, Ord, Show)
@@ -34,7 +33,6 @@ data SimpleLabel = Public | Classified | TopSecret
 instance Label SimpleLabel where
   x `canFlowTo` y = x <= y
   lub = max
-  public = Public
 
 -- examples
 
@@ -133,10 +131,18 @@ main = do
 
 -}
 
-putStrLn :: Label l => String -> LIO l ()
-putStrLn s = do guardWrite public
-                liftIOTCB $ IO.putStrLn s
+-- Public actions
+
+class Label l => PublicAction l where
+  publicLabel :: l
+
+  putStrLn :: String -> LIO l ()
+  -- Default implementation
+  putStrLn s = do guardWrite publicLabel
+                  liftIOTCB $ IO.putStrLn s
   
+
+instance PublicAction SimpleLabel where publicLabel = Public
 
 -- We can already have a simple example here of running a function
 -- that tries to print a string with the current label set to either
@@ -216,7 +222,7 @@ newtype SetLabel = SetLabel (Set Principal)
 instance Label SetLabel where
   (SetLabel s1) `canFlowTo` (SetLabel s2) = s2 `Set.isSubsetOf` s1
   (SetLabel s1) `lub` (SetLabel s2) = SetLabel $ s2 `Set.union` s1
-  public = SetLabel Set.empty
+
 
 data PrincipalPriv = PrincipalPrivTCB Principal
 
@@ -226,6 +232,8 @@ instance Priv SetLabel PrincipalPriv where
 -- | Helper function for converting a list of principals into a label
 setLabel :: [Principal] -> SetLabel
 setLabel = SetLabel . Set.fromList
+
+instance PublicAction SetLabel where publicLabel = setLabel []
 
 -- examples (maybe variants of the examples in earlier sections above)
 
