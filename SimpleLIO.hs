@@ -13,7 +13,6 @@ import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.Class (lift)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar
-import Data.Monoid
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.IORef
@@ -47,7 +46,7 @@ simpleExample0 =
 ----------------------------------------------------------------------
 -- Privileges
 
-class (Label l, Monoid p) => Priv l p where
+class Label l => Priv l p where
   -- | Dowgrade the label as much as possible (to the bottom element)
   -- using the supplied privileges
   downgradeP :: p -> l -> l
@@ -77,10 +76,6 @@ data SimplePriv = SimplePrivTCB SimpleLabel
 -- The "TCB" here (and below) indicates that, in a real system, this
 -- constructor would not be made available to untrusted user code.
 
-instance Monoid SimplePriv where
-  mempty = SimplePrivTCB $ Public
-  (SimplePrivTCB p1) `mappend` (SimplePrivTCB p2) = SimplePrivTCB $ p1 `lub` p2
-
 instance Priv SimpleLabel SimplePriv where
   downgradeP (SimplePrivTCB priv) lbl =
     if priv >= lbl then Public
@@ -104,10 +99,6 @@ simpleExample1 =
 -- (there are only a few).
 
 data NoPriv = NoPriv
-
-instance Monoid NoPriv where
-  mempty       = NoPriv
-  mappend  _ _ = NoPriv
 
 instance Label l => Priv l NoPriv where
   downgradeP _ l = l
@@ -441,13 +432,6 @@ data SetPriv = SetPrivTCB SetLabel
 -- would be better to use Set Principal.  This will also mean we can
 -- reuse it for integrity below.
 
-instance Monoid SetPriv where
-  -- The empty privilege means we're not speaking on behalf of anybody
-  mempty = SetPrivTCB . SetLabel $ Set.empty
-
-  -- The combination of set privilege amounts to simply cominging the
-  -- underlying set of principals
-  (SetPrivTCB p1) `mappend` (SetPrivTCB p2) = SetPrivTCB $ p1 `lub` p2
 
 -- To downgrade a label by a privilege, we simply remove the
 -- privilege's principals from the label; by exercising this
