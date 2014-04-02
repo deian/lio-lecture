@@ -97,8 +97,8 @@ getLabel = LIOTCB . StateT $ \l -> return (l, l)
 setLabelTCB :: l -> LIO l ()
 setLabelTCB l = LIOTCB . StateT $ \_ -> return ((), l)
 
-guardRead :: Label l => l -> LIO l ()
-guardRead l = do 
+raiseLabel :: Label l => l -> LIO l ()
+raiseLabel l = do 
  lcur <- getLabel
  setLabelTCB $ lcur `lub` l
 
@@ -135,58 +135,34 @@ main = do
 
 -}
 
-{- TODO[ds]
--- The next two functions are intended only for use by the internals
--- of the LIO library.  In a real implementation we'd use modules to
--- control their visibility.  For today, we'll just be careful where
--- we use them.
-guardIO :: Label l => l -> l -> LIO l ()
-guardIO lmin lmax = 
-  LIO $ \l -> if lmin `canFlowTo` l && l `canFlowTo` lmax 
-              then return ((),l) 
-              else error "foo"
--}
-
--- Now we use these functions to carefully lift certain operations
--- from IO to LIO, equipping the raw IO operations with appropriate
--- information-flow policies...
-
+-- We can already have a simple example here of running a function
+-- that tries to print a string with the current label set to either
+-- Public or Classified...
 putStrLn :: Label l => String -> LIO l ()
 putStrLn s = do guardWrite public
                 liftIOTCB $ IO.putStrLn s
   
--- We can already have a simple example here of running a function
--- that tries to print a string with the current label set to either
--- Public or Classified...
 
 
 ----------------------------------------------------------------------
 -- LIORef
 
-data LIORef l a = LIORefTCB (l, IORef a)
+data LIORef l a = LIORefTCB l (IORef a)
 
 newLIORef :: Label l => l -> a -> LIO l (LIORef l a)
 newLIORef l x = do
- guardWrite l
- ref <- liftIOTCB $ newIORef x
- return $ LIORefTCB (l, ref)
+  guardWrite l
+  ref <- liftIOTCB $ newIORef x
+  return $ LIORefTCB l ref
 
-{- These still need to be fixed for the StateT representation of LIO...
+readLIORef (LIORefTCB l ref) = do
+  raiseLabel l
+  liftIOTCB $ readIORef ref
 
--- (Move this higher)
-raiseLabel :: Label l => l -> LIO l ()
-raiseLabel l' = LIO $ \l -> return ((), l `lub` l')
-
-readLIORef :: Label l => LIORef l a -> LIO l a
-readLIORef (LIORefTCB (lr,r)) = 
-  do raiseLabel lr
-     liftIO (readIORef r)
-
-writeLIORef :: Label l => LIORef l a -> LIO l a
-writeLIORef (LIORefTCB (lr,r)) = 
-  do raiseLabel lr
-     liftIO (readIORef r)
--}
+writeLIORef :: Label l => LIORef l a -> a -> LIO l ()
+writeLIORef (LIORefTCB l ref) x = do
+  guardWrite l
+  liftIOTCB $ writeIORef ref x
 
 -- examples showing how the current label interacts with the label in
 -- an LIORef  (make a secret, read it, try to print a message)
@@ -221,13 +197,13 @@ labelOf (LabeledTCB l x) = l
 -- `unlabel` raises current label to (old current label `lub` value label)
 unlabel :: (Label l) => Labeled l a -> LIO l a
 unlabel (LabeledTCB l x) = do
-  guardRead l
+  raiseLabel l
   return x
 
 -- `unlabelP` uses privileges to raise label less
 unlabelP :: Priv l p => p -> Labeled l a -> LIO l a
 unlabelP p (LabeledTCB l x) = do
-  guardRead (downgradeP p l)
+  raiseLabel (downgradeP p l)
   return x
 
 -- Examples...
