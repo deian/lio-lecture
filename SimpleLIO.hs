@@ -416,7 +416,7 @@ simpleExample8 = runSimpleExample $ do
 
 
 ----------------------------------------------------------------------
--- The "Readers" Label Model
+-- the "readers" Label Model
 
 type Principal = String
 
@@ -479,6 +479,9 @@ topSecret  = secLabel [ "TopSecret" , "Classified" ]
 classified = secLabel [ "Classified" ]
 public     = secLabel [ ]
 
+topSecretPriv = mintSecPrivTCB topSecret
+classifiedPriv = mintSecPrivTCB classified
+
 secExample0 = runSecExample $ return
   [ public     `canFlowTo` topSecret
   , classified `canFlowTo` classified 
@@ -487,6 +490,7 @@ secExample0 = runSecExample $ return
   , classified `canFlowTo` public
   , topSecret  `canFlowTo` classified ]
 
+-- fix
 secExample1 = runSecExample $ return
   [ canFlowToP (mintSecPrivTCB topSecret ) topSecret  public
   , canFlowToP (mintSecPrivTCB topSecret ) classified public
@@ -512,12 +516,13 @@ secExample2 = runSecExample $ do
   putStrLn "Hello public world!"
   raiseLabel alice
   putStrLnP alicePriv "hey!"
-  raiseLabel $ alice `lub` bob
-  putStrLnP alicePriv "hey again!"
+  raiseLabel $ bob
+  putStrLnP alicePriv "hey again!"   -- fails
 -- Hello public world!
 -- Hey!
 -- *** Exception: user error (insufficient privs)
 
+-- BCP: I said this works, but actually it doesn't -- think about why
 secExample3 = runSecExample $ do
   putStrLn "Hello public world!"
   raiseLabel alice
@@ -539,7 +544,7 @@ secExample4 = runSecExample $ do
   forkLIO $ do
     raiseLabel bob
     putStrLnP bobPriv "I'll wait for a message from Alice"
-    secret <- takeLMVarP bobPriv secretVar
+    secret <- takeLMVarP bobPriv secretVar  -- BCP: This succeeds, yes?
     putStrLnP bobPriv secret -- This will fail!
 
 
