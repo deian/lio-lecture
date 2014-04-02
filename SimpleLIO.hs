@@ -147,14 +147,18 @@ guardIO lmin lmax =
               else error "foo"
 -}
 
+-- Now we use these functions to carefully lift certain operations
+-- from IO to LIO, equipping the raw IO operations with appropriate
+-- information-flow policies...
+
 putStrLn :: Label l => String -> LIO l ()
 putStrLn s = do guardWrite public
                 liftIOTCB $ IO.putStrLn s
   
+-- We can already have a simple example here of running a function
+-- that tries to print a string with the current label set to either
+-- Public or Classified...
 
--- Now we use these functions to carefully lift certain operations
--- from IO to LIO, equipping the raw IO operations with appropriate
--- information-flow policies...
 
 ----------------------------------------------------------------------
 -- LIORef
@@ -167,11 +171,25 @@ newLIORef l x = do
  ref <- liftIOTCB $ newIORef x
  return $ LIORefTCB (l, ref)
 
+{- These still need to be fixed for the StateT representation of LIO...
+
+-- (Move this higher)
+raiseLabel :: Label l => l -> LIO l ()
+raiseLabel l' = LIO $ \l -> return ((), l `lub` l')
+
 readLIORef :: Label l => LIORef l a -> LIO l a
-readLIORef = undefined
+readLIORef (LIORefTCB (lr,r)) = 
+  do raiseLabel lr
+     liftIO (readIORef r)
+
+writeLIORef :: Label l => LIORef l a -> LIO l a
+writeLIORef (LIORefTCB (lr,r)) = 
+  do raiseLabel lr
+     liftIO (readIORef r)
+-}
 
 -- examples showing how the current label interacts with the label in
--- an LIORef
+-- an LIORef  (make a secret, read it, try to print a message)
 
 -- lifting concurrency primitives into LIO
 -- examples (like the one at the end of the lecture)
@@ -241,21 +259,24 @@ instance Priv SetLabel PrincipalPriv where
 setLabel :: [Principal] -> SetLabel
 setLabel = SetLabel . Set.fromList
 
--- examples (maybe variants of the examples above)
+-- examples (maybe variants of the examples in earlier sections above)
 
-{-
+{- Encoding the 3-point label model
 topSecret  = "TopSecret" /\ "Classified" /\ "Public"
 classified = "Classified" /\ "Public"
 public     = "Public"
 -}
 
 ----------------------------------------------------------------------
--- Integrity
--- (for the sets-of-principals model)
+-- Integrity (presented as a pure-integrity sets-of-principals model)
+
+-- (Maybe we want to rename the SetLabel model to something like
+-- Readers so that this can have the same representation but a
+-- different name and a different behavior for the operations)
 
 ----------------------------------------------------------------------
 -- DC labels
--- (just give examples with pure conjunction and pure disjunction)
+-- (but just give examples with pure conjunction and pure disjunction)
 
 ----------------------------------------------------------------------
 
