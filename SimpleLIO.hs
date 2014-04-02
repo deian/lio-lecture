@@ -442,6 +442,9 @@ runSetExample = runExample
 alice      = fromList [ "Alice" ]
 bob        = fromList [ "Bob" ]
 
+alicePriv = SetPrivTCB alice
+bobPriv   = SetPrivTCB bob
+
 -- Encoding the Public/Classified/TopSecret label model
 topSecret  = fromList [ "TopSecret" , "Classified" , "Public" ]
 classified = fromList [ "Classified" , "Public" ]
@@ -548,14 +551,14 @@ labelOf (LabeledTCB l x) = l
 
 type DB l = Map Principal (Labeled l String)
 
-updateDB :: Label l => LMVar l (DB l) -> Principal -> String -> l -> LIO l ()
-updateDB db prin s l = do
+updateDB :: Label l => LMVar l (DB l) -> Principal -> l -> String -> LIO l ()
+updateDB db prin l s = do
   m <- takeLMVarP NoPriv db
   v <- label l s
   putLMVarP NoPriv db $ Map.insert prin v m
 
-queryDB :: Label l => LMVar l (DB l) -> Principal -> l -> LIO l String
-queryDB db prin l = do
+queryDB :: Label l => LMVar l (DB l) -> Principal -> LIO l String
+queryDB db prin = do
   m <- takeLMVarP NoPriv db
   putLMVarP NoPriv db m
   case Map.lookup prin m of
@@ -565,14 +568,24 @@ queryDB db prin l = do
 
 setExample9 = runSetExample $ do
   db <- newEmptyLMVarP NoPriv public
-  -- First thread:
+  -- First alice thread:
   forkLIO $ do
     raiseLabel alice
-    undefined
-  -- Second thread:
+    updateDB db "alice" alice "Alice's big secret"
+  -- Second alice thread:
+  forkLIO $ do
+    raiseLabel alice
+    s <- queryDB db "alice"
+    putStrLnP alicePriv $ "Alice: " ++ s
+  -- First bob thread:
   forkLIO $ do
     raiseLabel bob
-    undefined
+    updateDB db "bob" bob "Bob's even bigger secret"
+  -- Second bob thread:
+  forkLIO $ do
+    raiseLabel alice
+    s <- queryDB db "alice"
+    putStrLnP alicePriv $ "Alice: " ++ s
 
 ----------------------------------------------------------------------
 -- Integrity (presented as a pure-integrity sets-of-principals model)
