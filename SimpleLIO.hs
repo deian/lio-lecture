@@ -1,8 +1,12 @@
 {-# OPTIONS_GHC  -fno-warn-unused-binds -fno-warn-unused-matches 
   -fno-warn-name-shadowing -fno-warn-missing-signatures #-}
 {-# LANGUAGE FlexibleInstances, MultiParamTypeClasses, 
-    UndecidableInstances, FlexibleContexts, TypeSynonymInstances #-}
+    UndecidableInstances, FlexibleContexts, TypeSynonymInstances,
+    GeneralizedNewtypeDeriving #-}
 
+import Control.Monad (unless)
+import Control.Monad.Trans.State.Strict
+import Control.Monad.Trans.Class (lift)
 import Data.Set (Set)
 import Data.IORef
 import qualified Data.Set as Set
@@ -80,13 +84,34 @@ False
 ----------------------------------------------------------------------
 -- the LIO monad
 
-newtype LIO l a = LIO { unLIO :: l -> IO (a, l) }
+newtype LIO l a = LIOTCB { unLIOTCB :: StateT l IO a }
+                  deriving (Functor, Monad)
 
-instance Monad (LIO l) where
-  return x = LIO $ \l -> return (x,l)
+-- | Run an LIO action with current label set to @l@.
+runLIO :: LIO l a -> l -> IO (a, l)
+runLIO lioAct l = runStateT (unLIOTCB lioAct) l
 
-  a >>= f = LIO $ \l -> do (r,l') <- unLIO a l
-                           unLIO (f r) l'
+getLabel :: LIO l l
+getLabel = LIOTCB . StateT $ \l -> return (l, l)
+
+setLabelTCB :: l -> LIO l ()
+setLabelTCB l = LIOTCB . StateT $ \_ -> return ((), l)
+
+guardRead :: Label l => l -> LIO l ()
+guardRead l = do 
+ lcur <- getLabel
+ setLabelTCB $ lcur `lub` l
+
+guardWrite :: Label l => l -> LIO l ()
+guardWrite l = do 
+ lcur <- getLabel
+ unless (lcur `canFlowTo` l) $ fail "write not allowed"
+
+-- (In a real implementation, we would not raise an error that halts
+-- the whole program; we would throw an exception that can be caught
+-- and recovered from.)
+liftIOTCB :: Label l => IO a -> LIO l a
+liftIOTCB = LIOTCB . lift
 
 {- 
 initCurLabel :: LIOState MilLabel
@@ -110,6 +135,7 @@ main = do
 
 -}
 
+{- TODO[ds]
 -- The next two functions are intended only for use by the internals
 -- of the LIO library.  In a real implementation we'd use modules to
 -- control their visibility.  For today, we'll just be careful where
@@ -119,32 +145,16 @@ guardIO lmin lmax =
   LIO $ \l -> if lmin `canFlowTo` l && l `canFlowTo` lmax 
               then return ((),l) 
               else error "foo"
+-}
 
--- (In a real implementation, we would not raise an error that halts
--- the whole program; we would throw an exception that can be caught
--- and recovered from.)
-
-liftIO :: Label l => IO a -> LIO l a
-liftIO a = LIO $ \l -> do r <- a
-                          return (r,l)
+putStrLn :: Label l => String -> LIO l ()
+putStrLn s = do guardWrite public
+                liftIOTCB $ IO.putStrLn s
+  
 
 -- Now we use these functions to carefully lift certain operations
 -- from IO to LIO, equipping the raw IO operations with appropriate
 -- information-flow policies...
-
-putStrLn :: Label l => String -> LIO l ()
-putStrLn s = do guardIO public public
-                liftIO $ IO.putStrLn s
-  
--- We can already have a simple example here of running a function
--- that tries to print a string with the current label set to either
--- Public or Classified...
-
--- (Not sure getLabel will be used in any of the examples in this
--- file, in which case maybe delete...)
-getLabel :: Label l => LIO l l
-getLabel = LIO $ \l -> return (l,l)
-
 
 ----------------------------------------------------------------------
 -- LIORef
@@ -152,8 +162,10 @@ getLabel = LIO $ \l -> return (l,l)
 data LIORef l a = LIORefTCB (l, IORef a)
 
 newLIORef :: Label l => l -> a -> LIO l (LIORef l a)
-newLIORef l' x = LIO $ \l -> do r <- newIORef x
-                                return (LIORefTCB (l', r), l)
+newLIORef l x = do
+ guardWrite l
+ ref <- liftIOTCB $ newIORef x
+ return $ LIORefTCB (l, ref)
 
 readLIORef :: Label l => LIORef l a -> LIO l a
 readLIORef = undefined
@@ -178,9 +190,11 @@ readLIORef = undefined
 
 data Labeled l t = LabeledTCB l t
 
--- `label` requires value label to be above current label
+-- label requires value label to be above current label
 label :: Label l => l -> a -> LIO l (Labeled l a)
-label l x = LIO $ \l -> return (LabeledTCB l x, l)
+label l x = do
+  guardWrite l
+  return $ LabeledTCB l x
 
 -- `labelOf` returns the label of a labeled value
 labelOf  :: Labeled l a -> l
@@ -188,11 +202,15 @@ labelOf (LabeledTCB l x) = l
 
 -- `unlabel` raises current label to (old current label `lub` value label)
 unlabel :: (Label l) => Labeled l a -> LIO l a
-unlabel (LabeledTCB l' x) = LIO $ \l -> return (x, l `lub` l')
+unlabel (LabeledTCB l x) = do
+  guardRead l
+  return x
 
 -- `unlabelP` uses privileges to raise label less
 unlabelP :: Priv l p => p -> Labeled l a -> LIO l a
-unlabelP p (LabeledTCB l' x) = LIO $ \l -> return (x, l `lub` downgradeP p l')
+unlabelP p (LabeledTCB l x) = do
+  guardRead (downgradeP p l)
+  return x
 
 -- Examples...
 
@@ -219,6 +237,9 @@ data PrincipalPriv = PrincipalPrivTCB Principal
 instance Priv SetLabel PrincipalPriv where
   downgradeP (PrincipalPrivTCB p) (SetLabel s) = SetLabel $ Set.delete p s
 
+-- | Helper function for converting a list of principals into a label
+setLabel :: [Principal] -> SetLabel
+setLabel = SetLabel . Set.fromList
 
 -- examples (maybe variants of the examples above)
 
