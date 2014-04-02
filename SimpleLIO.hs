@@ -88,10 +88,6 @@ simpleExample1 =
 -- to define unprivileged versions of privileged operations.  'NoPriv'
 -- corresponding to an empty privilege, regardless of the label type.
 
--- BCP: It might be simpler just to define the no-privilege operations
--- directly, below, rather than taking the trouble to define NoPriv
--- (there are only a few).
-
 data NoPriv = NoPriv
   deriving Show
 
@@ -143,9 +139,12 @@ getLabel = LIOTCB . StateT $ \l -> return (l, l)
 -- consideration).
 
 setLabelP :: Priv l p => p -> l -> LIO l ()
-setLabelP priv l = do
+setLabelP p l = do
  lcur <- getLabel
- unless (canFlowToP priv lcur l) $ fail "insufficient privs"
+ unless (canFlowToP p lcur l) $ 
+   fail ("setLabel from " ++ (show lcur) ++ 
+         " to " ++ (show l) ++ 
+         " not allowed with privilege " ++ (show p))
  LIOTCB . StateT $ \_ -> return ((), l)
 
 -- (In a real implementation, we would not raise an error that halts
@@ -437,7 +436,7 @@ instance Label SecLabel where
 
   -- Combining data from two entities means that we have to preserve
   -- the privacy of the principals from both sets.
-  (SecLabel s1) `lub` (SecLabel s2) = SecLabel $ s2 `Set.union` s2
+  (SecLabel s1) `lub` (SecLabel s2) = SecLabel $ s1 `Set.union` s2
 
 
 -- | A set privilege means that we can "speak on behalf of" the
@@ -522,7 +521,6 @@ secExample2 = runSecExample $ do
 -- Hey!
 -- *** Exception: user error (insufficient privs)
 
--- BCP: I said this works, but actually it doesn't -- think about why
 secExample3 = runSecExample $ do
   putStrLn "Hello public world!"
   raiseLabel alice
