@@ -29,15 +29,19 @@ instance Label SimpleLabel where
 ----------------------------------------------------------------------
 -- Privileges
 
-class Label l => PrivDesc l p where
-  canFlowToP :: p -> l -> l -> Bool
-  canFlowToP p l1 l2 = (downgradeP p l1) `canFlowTo` l2
+-- BCP: Do we really need the distinction between privileges and
+-- privilege descriptions??
+
+class Label l => Priv l p where
   downgradeP :: p -> l -> l
+  canFlowToP :: p -> l -> l -> Bool
+  -- default implementation of canFlowToP
+  canFlowToP p l1 l2 = (downgradeP p l1) `canFlowTo` l2
 
-data SimplePriv = SimplePriv SimpleLabel
+data SimplePriv = SimplePrivTCB SimpleLabel
 
-instance PrivDesc SimpleLabel SimplePriv where
-  downgradeP (SimplePriv priv) lbl =
+instance Priv SimpleLabel SimplePriv where
+  downgradeP (SimplePrivTCB priv) lbl =
     if priv >= lbl then Public
       else lbl
 
@@ -45,17 +49,17 @@ instance PrivDesc SimpleLabel SimplePriv where
 
 {- 
 ~~~
-*Main> canFlowToP (SimplePriv TopSecret)
+*Main> canFlowToP (SimplePrivTCB TopSecret)
                   (SimpleLabel TopSecret)
                   (SimpleLabel Public)
 True
 
-*Main> canFlowToP (SimplePriv TopSecret)
+*Main> canFlowToP (SimplePrivTCB TopSecret)
                   (SimpleLabel Classified)
                   (SimpleLabel Public)
 True
 
-*Main> canFlowToP (SimplePriv Classified)
+*Main> canFlowToP (SimplePrivTCB Classified)
                   (SimpleLabel TopSecret)
                   (SimpleLabel Public)
 False
@@ -117,17 +121,28 @@ putStrLn :: Label l => String -> LIO l ()
 putStrLn s = do guardIO public public
                 liftIO $ IO.putStrLn s
   
+getLabel :: Label l => LIO l l
+getLabel = LIO $ \l -> return (l,l)
 
 -- labeled values
 
-data Labeled l t = Labeled l t
+data Labeled l t = LabeledTCB l t
 
-{-
+-- label requires value label to be above current label
 label :: Label l => l -> a -> LIO l (Labeled l a)
-unlabel :: (Label l) => Labeled l a -> LIO l a
-unlabelP :: Priv l p => p -> Labeled l a -> LIO l a
+label l x = LIO $ \l -> return (LabeledTCB l x, l)
+
+-- `labelOf` returns the label of a labeled value
 labelOf  :: Labeled l a -> l
--}
+labelOf (LabeledTCB l x) = l
+
+-- `unlabel` raises current label to (old current label `lub` value label)
+unlabel :: (Label l) => Labeled l a -> LIO l a
+unlabel (LabeledTCB l' x) = LIO $ \l -> return (x, l `lub` l')
+
+-- `unlabelP` uses privileges to raise label less
+unlabelP :: Priv l p => p -> Labeled l a -> LIO l a
+unlabelP p (LabeledTCB l' x) = LIO $ \l -> return (x, l `lub` downgradeP p l')
 
 -- lifting IO actions into LIO — in particular, IORefs
 -- examples
@@ -146,12 +161,12 @@ newtype SetLabel = SetLabel (Set Principal)
 instance Label SetLabel where
   (SetLabel s1) `canFlowTo` (SetLabel s2) = s2 `Set.isSubsetOf` s1
   (SetLabel s1) `lub` (SetLabel s2) = SetLabel $ s2 `Set.union` s1
+  public = SetLabel Set.empty
 
+data PrincipalPriv = PrincipalPrivTCB Principal
 
-data PrincipalPriv = PrincipalPriv Principal
-
-instance PrivDesc SetLabel PrincipalPriv where
-  downgradeP (PrincipalPriv p) (SetLabel s) = SetLabel $ Set.delete p s
+instance Priv SetLabel PrincipalPriv where
+  downgradeP (PrincipalPrivTCB p) (SetLabel s) = SetLabel $ Set.delete p s
 
 
 -- examples (maybe variants of the examples above)
