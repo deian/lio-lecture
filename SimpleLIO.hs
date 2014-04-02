@@ -4,6 +4,7 @@
     UndecidableInstances, FlexibleContexts, TypeSynonymInstances #-}
 
 import Data.Set (Set)
+import Data.IORef
 import qualified Data.Set as Set
 import qualified System.IO as IO
 
@@ -46,6 +47,9 @@ class Label l => Priv l p where
   canFlowToP p l1 l2 = (downgradeP p l1) `canFlowTo` l2
 
 data SimplePriv = SimplePrivTCB SimpleLabel
+
+-- The "TCB" here indicates that, in a real system, this constructor
+-- would not be made available to untrusted user code.
 
 instance Priv SimpleLabel SimplePriv where
   downgradeP (SimplePrivTCB priv) lbl =
@@ -116,6 +120,10 @@ guardIO lmin lmax =
               then return ((),l) 
               else error "foo"
 
+-- (In a real implementation, we would not raise an error that halts
+-- the whole program; we would throw an exception that can be caught
+-- and recovered from.)
+
 liftIO :: Label l => IO a -> LIO l a
 liftIO a = LIO $ \l -> do r <- a
                           return (r,l)
@@ -158,8 +166,15 @@ unlabelP p (LabeledTCB l' x) = LIO $ \l -> return (x, l `lub` downgradeP p l')
 -- we can't print any more)
 
 ----------------------------------------------------------------------
+-- LIORef
 
--- lifting IORefs into LIO
+data LIORef l a = LIORefTCB (l, IORef a)
+
+newLIORef :: Label l => l -> a -> LIO l (LIORef l a)
+newLIORef l' x = LIO $ \l -> do r <- newIORef x
+                                return (LIORefTCB (l', r), l)
+
+readLIORef :: Label l => LIORef l a -> LIO l a
 
 -- examples showing how the current label interacts with the label in
 -- an LIORef
