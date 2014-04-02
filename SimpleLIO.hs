@@ -455,8 +455,9 @@ runSetExample :: (Show a) => LIO SetLabel a -> IO ()
 runSetExample = runExample
 
 -- Alice and Bob
-alice      = fromList [ "Alice" ]
-bob        = fromList [ "Bob" ]
+alice       = fromList [ "Alice" ]
+bob         = fromList [ "Bob" ]
+aliceAndBob = fromList [ "Alice", "Bob" ]
 
 alicePriv = mintSetPrivTCB alice
 bobPriv   = mintSetPrivTCB bob
@@ -479,6 +480,22 @@ setExample1 = runSetExample $ return
   , canFlowToP (mintSetPrivTCB topSecret ) classified public
   , canFlowToP (mintSetPrivTCB classified) classified public
   , canFlowToP (mintSetPrivTCB classified) topSecret  public ]
+
+
+setExample0' = runSetExample $ return
+  [ alice       `canFlowTo` aliceAndBob
+  , bob         `canFlowTo` aliceAndBob
+  , aliceAndBob `canFlowTo` alice
+  , aliceAndBob `canFlowTo` bob
+  , alice       `canFlowTo` bob
+  , bob         `canFlowTo` alice ]
+
+setExample1' = runSetExample $ return
+  [ canFlowToP bobPriv   aliceAndBob alice
+  , canFlowToP alicePriv aliceAndBob bob
+  , canFlowToP alicePriv alice       bob
+  , canFlowToP bobPriv   bob         alice
+  ]
 
 setExample2 = runSetExample $ do
   putStrLn "Hello public world!"
