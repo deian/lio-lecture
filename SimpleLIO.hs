@@ -613,6 +613,11 @@ setExample9 = runSetExample $ do
   forkLIO $ do
     s <- queryDB db "bob"
     putStrLnP bobPriv $ "Bob: " ++ s
+  -- Eve thread:
+  forkLIO $ do
+    putStrLnP NoPriv $ "Eve: I'm about to read the secret... " 
+    s <- queryDB db "alice"
+    putStrLnP NoPriv $ "Eve: " ++ s      -- Fails
 
 ----------------------------------------------------------------------
 -- Integrity (presented as a pure-integrity sets-of-principals model)
