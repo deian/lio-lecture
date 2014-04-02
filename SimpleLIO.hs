@@ -119,6 +119,7 @@ runLIO lioAct l = runStateT (unLIOTCB lioAct) l
 
 runExample :: (Show a, PublicAction l) => LIO l a -> IO ()
 runExample act = do
+  IO.hSetBuffering IO.stdout IO.LineBuffering
   (a, l) <- runLIO act publicLabel
   IO.putStrLn $ show a
   IO.putStrLn  $ "=> " ++ show l ++ " <="
@@ -335,12 +336,14 @@ forkLIO lioAct = do
 
 data LMVar l a = LMVarTCB l (MVar a)
 
--- BCP: Why do the next two definitions need to take privileges?
 newLMVarP :: Priv l p => p -> l -> a -> LIO l (LMVar l a)
 newLMVarP p l x = do
   guardWriteP p l
   mvar <- liftIOTCB $ newMVar x
   return $ LMVarTCB l mvar
+
+newLMVar :: Label l => l -> a -> LIO l (LMVar l a)
+newLMVar = newLMVarP NoPriv
 
 newEmptyLMVarP :: Priv l p => p -> l -> LIO l (LMVar l a)
 newEmptyLMVarP p l = do
@@ -348,8 +351,8 @@ newEmptyLMVarP p l = do
   mvar <- liftIOTCB $ newEmptyMVar
   return $ LMVarTCB l mvar
 
--- BCP: I understand why these need privileges, but I wonder whether
--- the unprivileged versions may be simpler to use in examples...
+newEmptyLMVar :: Label l => l -> LIO l (LMVar l a)
+newEmptyLMVar = newEmptyLMVarP NoPriv
 
 takeLMVarP :: Priv l p => p -> LMVar l a -> LIO l a
 takeLMVarP p (LMVarTCB l mvar) = do
@@ -357,25 +360,32 @@ takeLMVarP p (LMVarTCB l mvar) = do
   guardWriteP p l
   liftIOTCB $ takeMVar mvar
 
+takeLMVar :: Label l => LMVar l a -> LIO l a
+takeLMVar = takeLMVarP NoPriv
+
 putLMVarP :: Priv l p => p -> LMVar l a -> a -> LIO l ()
 putLMVarP p (LMVarTCB l mvar) x = do
   raiseLabelP p l
   guardWriteP p l
   liftIOTCB $ putMVar mvar x
 
+putLMVar :: Label l => LMVar l a -> a -> LIO l ()
+putLMVar = putLMVarP NoPriv
+
+
 simpleExample8 = runSimpleExample $ do
-  aliceSecret <- newEmptyLMVarP NoPriv TopSecret
-  bobSecret <- newEmptyLMVarP NoPriv TopSecret
+  aliceSecret <- newEmptyLMVar TopSecret
+  bobSecret <- newEmptyLMVar TopSecret
   -- as alice:
   forkLIO $ do putStrLn "<alice<"
                secret <- getLine
-               putLMVarP NoPriv aliceSecret secret
+               putLMVar aliceSecret secret
   -- as bob:
   forkLIO $ do msg <- takeLMVarP (SimplePrivTCB TopSecret) aliceSecret
                putStrLn $ ">bob> " ++ msg
-               putLMVarP NoPriv bobSecret ""
+               putLMVar bobSecret ""
   -- as the messenger:
-  msg <- takeLMVarP NoPriv bobSecret
+  msg <- takeLMVar bobSecret
   putStrLn $ "Intercepted message: " ++ show msg
 -- *Main> simpleExample8
 -- <alice<
@@ -488,18 +498,18 @@ setExample3 = runSetExample $ do
         allPrivs  = mintSetPrivTCB $ alice `lub` bob
 
 setExample4 = runSetExample $ do
-  secretVar <- newEmptyLMVarP NoPriv alice
+  secretVar <- newEmptyLMVar alice
   -- First thread:
   forkLIO $ do
     raiseLabel alice
-    putLMVarP NoPriv secretVar "Please do not share"
+    putLMVar secretVar "Please do not share"
   -- Second thread:
   forkLIO $ do
     raiseLabel bob
     putStrLnP bobPriv "I'll wait for a message from Alice"
     secret <- takeLMVarP bobPriv secretVar
     putStrLnP bobPriv secret -- This will fail!
-  where bobPriv = mintSetPrivTCB alice
+  where bobPriv = mintSetPrivTCB bob
 
 
 ----------------------------------------------------------------------
