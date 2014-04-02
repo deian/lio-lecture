@@ -136,10 +136,45 @@ putStrLn :: Label l => String -> LIO l ()
 putStrLn s = do guardIO public public
                 liftIO $ IO.putStrLn s
   
+-- We can already have a simple example here of running a function
+-- that tries to print a string with the current label set to either
+-- Public or Classified...
+
+-- (Not sure getLabel will be used in any of the examples in this
+-- file, in which case maybe delete...)
 getLabel :: Label l => LIO l l
 getLabel = LIO $ \l -> return (l,l)
 
--- labeled values
+
+----------------------------------------------------------------------
+-- LIORef
+
+data LIORef l a = LIORefTCB (l, IORef a)
+
+newLIORef :: Label l => l -> a -> LIO l (LIORef l a)
+newLIORef l' x = LIO $ \l -> do r <- newIORef x
+                                return (LIORefTCB (l', r), l)
+
+readLIORef :: Label l => LIORef l a -> LIO l a
+readLIORef = undefined
+
+-- examples showing how the current label interacts with the label in
+-- an LIORef
+
+-- lifting concurrency primitives into LIO
+-- examples (like the one at the end of the lecture)
+
+-- lifting MVars into LIO
+-- more examples -- e.g., maybe a password checker
+
+----------------------------------------------------------------------
+-- Labeled values
+
+-- BCP: Wondering whether it's simpler to present this bit first or
+-- whether it's simpler to introduce LIORefs first.  I think probably
+-- LIORefs should go first (so I've moved this later).  LIORefs
+-- involves refs, but that's something they've seen before.  Labeled
+-- data is more unfamiliar in this context.
 
 data Labeled l t = LabeledTCB l t
 
@@ -164,26 +199,6 @@ unlabelP p (LabeledTCB l' x) = LIO $ \l -> return (x, l `lub` downgradeP p l')
 -- (simple functional-programming examples where we create a secret,
 -- print something to stdout, then unlabel the secret and notice that
 -- we can't print any more)
-
-----------------------------------------------------------------------
--- LIORef
-
-data LIORef l a = LIORefTCB (l, IORef a)
-
-newLIORef :: Label l => l -> a -> LIO l (LIORef l a)
-newLIORef l' x = LIO $ \l -> do r <- newIORef x
-                                return (LIORefTCB (l', r), l)
-
-readLIORef :: Label l => LIORef l a -> LIO l a
-
--- examples showing how the current label interacts with the label in
--- an LIORef
-
--- lifting concurrency primitives into LIO
--- examples (like the one at the end of the lecture)
-
--- lifting MVars into LIO
--- more examples -- e.g., maybe a password checker
 
 ----------------------------------------------------------------------
 ----------------------------------------------------------------------
