@@ -416,15 +416,7 @@ instance Label SetLabel where
 -- | A set privilege means that we can "speak on behalf of" the
 -- principals in the set, i.e., we can declassify the data of these
 -- principals.
-data SetPriv = SetPrivTCB SetLabel
-
--- Here we wrapped SetLabel as opposed to 'Set Principal' for
--- simplicity.
-
--- BCP: I think the simplicity comes at the expense of clarity --
--- would be better to use Set Principal.  This will also mean we can
--- reuse it for integrity below.
-
+data SetPriv = SetPrivTCB (Set Principal)
 
 -- To downgrade a label by a privilege, we simply remove the
 -- privilege's principals from the label; by exercising this
@@ -432,8 +424,14 @@ data SetPriv = SetPrivTCB SetLabel
 -- the data private.
 
 instance Priv SetLabel SetPriv where
-  downgradeP (SetPrivTCB (SetLabel p)) (SetLabel s) = 
+  downgradeP (SetPrivTCB p) (SetLabel s) = 
     SetLabel $ s Set.\\ p
+
+-- It is useful to "mint" a new privilege that let's us bypass the restrictions of
+-- a label directly.  Since set labels and privileges share the same underlying
+-- structure
+mintSetPrivTCB :: SetLabel -> SetPriv
+mintSetPrivTCB (SetLabel ps) = SetPrivTCB ps
 
 instance PublicAction SetLabel where publicLabel = fromList []
 
@@ -458,22 +456,35 @@ setExample0 = runSetExample $ return
   , topSecret  `canFlowTo` classified ]
 
 setExample1 = runSetExample $ return
-  [ canFlowToP (SetPrivTCB topSecret ) topSecret  public
-  , canFlowToP (SetPrivTCB topSecret ) classified public
-  , canFlowToP (SetPrivTCB classified) classified public
-  , canFlowToP (SetPrivTCB classified) topSecret  public ]
+  [ canFlowToP (mintSetPrivTCB topSecret ) topSecret  public
+  , canFlowToP (mintSetPrivTCB topSecret ) classified public
+  , canFlowToP (mintSetPrivTCB classified) classified public
+  , canFlowToP (mintSetPrivTCB classified) topSecret  public ]
 
 setExample2 = runSetExample $ do
   putStrLn "Hello public world!"
   raiseLabel alice
-  putStrLnP (SetPrivTCB alice) "hey!"
+  putStrLnP alicePriv "hey!"
   raiseLabel $ alice `lub` bob
-  putStrLnP (SetPrivTCB alice) "hey again!"
+  putStrLnP alicePriv "hey again!"
 -- Hello public world!
 -- Hey!
 -- *** Exception: user error (insufficient privs)
+  where alicePriv = SetPrivTCB $ Set.singleton "alice"
 
-setExample8 = runSetExample $ do
+setExample3 = runSetExample $ do
+  putStrLn "Hello public world!"
+  raiseLabel alice
+  putStrLnP alicePriv "hey!"
+  raiseLabel $ alice `lub` bob
+  putStrLnP allPrivs "hey again!"
+-- Hello public world!
+-- Hey!
+-- *** Exception: user error (insufficient privs)
+  where alicePriv = mintSetPrivTCB alice
+        allPrivs  = mintSetPrivTCB $ alice `lub` bob
+
+setExample4 = runSetExample $ do
   secretVar <- newEmptyLMVarP NoPriv alice
   -- First thread:
   forkLIO $ do
@@ -482,10 +493,10 @@ setExample8 = runSetExample $ do
   -- Second thread:
   forkLIO $ do
     raiseLabel bob
-    let bobPriv = SetPrivTCB bob
     putStrLnP bobPriv "I'll wait for a message from Alice"
     secret <- takeLMVarP bobPriv secretVar
     putStrLnP bobPriv secret -- This will fail!
+  where bobPriv = mintSetPrivTCB alice
 
 
 ----------------------------------------------------------------------
