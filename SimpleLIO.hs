@@ -4,6 +4,7 @@
     UndecidableInstances, FlexibleContexts, TypeSynonymInstances,
     GeneralizedNewtypeDeriving #-}
 
+import Prelude hiding (putStrLn)
 import Control.Monad (unless)
 import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.Class (lift)
@@ -30,6 +31,16 @@ instance Label SimpleLabel where
   lub = max
 
 -- examples
+
+simpleExample0 = runSimpleExample $ return
+  [ canFlowTo Public TopSecret
+  , canFlowTo Classified Classified 
+  , canFlowTo Classified TopSecret 
+  , canFlowTo TopSecret Public
+  , canFlowTo Classified Public
+  , canFlowTo TopSecret Classified ]
+
+-- [True,True,True,False,False,False]
 
 ----------------------------------------------------------------------
 -- Privileges
@@ -71,25 +82,17 @@ instance Priv SimpleLabel SimplePriv where
 
 -- examples
 
-{- 
-~~~
-*Main> canFlowToP (SimplePrivTCB TopSecret)
-                  (SimpleLabel TopSecret)
-                  (SimpleLabel Public)
-True
+simpleExample1 = runSimpleExample $ return
+  [ canFlowToP (SimplePrivTCB TopSecret ) TopSecret  Public
+  , canFlowToP (SimplePrivTCB TopSecret ) Classified Public
+  , canFlowToP (SimplePrivTCB Classified) Classified Public
+  , canFlowToP (SimplePrivTCB Classified) TopSecret  Public ]
 
-*Main> canFlowToP (SimplePrivTCB TopSecret)
-                  (SimpleLabel Classified)
-                  (SimpleLabel Public)
-True
+-- [True,True,True,False]
 
-*Main> canFlowToP (SimplePrivTCB Classified)
-                  (SimpleLabel TopSecret)
-                  (SimpleLabel Public)
-False
-~~~
--}
 
+----------------------------------------------------------------------
+-- No privs
 
 -- Below we're going to define the LIO monad. Since certain actions
 -- require privileges to be permisive we define a privilege type
@@ -117,6 +120,15 @@ newtype LIO l a = LIOTCB { unLIOTCB :: StateT l IO a }
 -- | Execute an LIO action with initial current label set to @l@.
 runLIO :: LIO l a -> l -> IO (a, l)
 runLIO lioAct l = runStateT (unLIOTCB lioAct) l
+
+-- With this, we can now give the definition for the runSimpleExample
+-- wrapper we used above:
+
+runSimpleExample :: Show a => LIO SimpleLabel a -> IO ()
+runSimpleExample act = do
+  (a, l) <- runLIO act Public
+  IO.putStrLn $ show a
+  IO.putStrLn  $ "=> " ++ show l ++ " <="
 
 -- In general, it is useful to figure out what the current label of
 -- the computation is; we're going to use this when we check where an
@@ -168,28 +180,6 @@ guardWrite l = do
 liftIOTCB :: Label l => IO a -> LIO l a
 liftIOTCB = LIOTCB . lift
 
-{- 
-initCurLabel :: LIOState MilLabel
-initCurLabel = 
-  LIOState { lioLabel = MilLabel Public (set [])
-           , lioClearance = MilLabel TopSecret (set [Crypto, Nuclear]) }
-
-mainLIO :: LIO MilLabel String
-mainLIO = do
-  lc <- label (MilLabel Classified (set [Crypto])) "w00t"
-  c <- unlabel lc
-  lts <- label (MilLabel TopSecret (set [Crypto, Nuclear])) $ 
-            c ++ ";cbc-nuke-128"
-  ts <- unlabel lts
-  -- label (MilLabel TopSecret (set [Nuclear])) $ "leaking...crypto: " ++ ts
-  return ts
-
-main = do
-  res <- runLIO mainLIO initCurLabel 
-  print res
-
--}
-
 -- As a first example of an IO function, let's lift putStrLn. While we
 -- can defined it as
 --
@@ -217,10 +207,41 @@ class Label l => PublicAction l where
   
 instance PublicAction SimpleLabel where publicLabel = Public
 
+simpleExample2 = runSimpleExample $ putStrLn "Hello LIO world!"
+-- hey!
+-- ()
+-- => Public <=
 
--- We can already have a simple example here of running a function
--- that tries to print a string with the current label set to either
--- Public or Classified (using raiseLabel to raise the label)...
+
+simpleExample3 = runSimpleExample $ do
+  putStrLn "Hello LIO world!"
+  raiseLabel TopSecret
+  putStrLn "Edward in the house..."
+
+-- Hello LIO world!
+-- *** Exception: user error (write not allowed)
+
+simpleExample4 = runSimpleExample $ do
+  putStrLn "Hello LIO world!"
+  raiseLabel TopSecret
+  setLabelP (SimplePrivTCB TopSecret) Public
+  putStrLn "Edward got privs..."
+-- Hello LIO world!
+-- Edward got privs...
+
+simpleExample5 = runSimpleExample $ do
+  let privs = SimplePrivTCB Classified
+  putStrLn "Hello LIO world!"
+  raiseLabel Classified
+  setLabelP privs Public
+  putStrLn "Bradley has some privs too..."
+  raiseLabel TopSecret
+  setLabelP privs Public
+  putStrLn "But not as many as Edward..."
+-- Hello LIO world!
+-- Bradley has some privs too...
+-- *** Exception: user error (insufficient privs)
+
 ----------------------------------------------------------------------
 -- LIORef
 
@@ -358,3 +379,30 @@ public     = "Public"
 ----------------------------------------------------------------------
 
 main = undefined
+
+
+--- 
+--- OLD STUFF
+--- 
+
+{- 
+initCurLabel :: LIOState MilLabel
+initCurLabel = 
+  LIOState { lioLabel = MilLabel Public (set [])
+           , lioClearance = MilLabel TopSecret (set [Crypto, Nuclear]) }
+
+mainLIO :: LIO MilLabel String
+mainLIO = do
+  lc <- label (MilLabel Classified (set [Crypto])) "w00t"
+  c <- unlabel lc
+  lts <- label (MilLabel TopSecret (set [Crypto, Nuclear])) $ 
+            c ++ ";cbc-nuke-128"
+  ts <- unlabel lts
+  -- label (MilLabel TopSecret (set [Nuclear])) $ "leaking...crypto: " ++ ts
+  return ts
+
+main = do
+  res <- runLIO mainLIO initCurLabel 
+  print res
+
+-}
