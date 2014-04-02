@@ -35,12 +35,12 @@ instance Label SimpleLabel where
 -- examples
 
 simpleExample0 = runSimpleExample $ return
-  [ canFlowTo Public TopSecret
+  [ canFlowTo Public     TopSecret
   , canFlowTo Classified Classified 
   , canFlowTo Classified TopSecret 
-  , canFlowTo TopSecret Public
+  , canFlowTo TopSecret  Public
   , canFlowTo Classified Public
-  , canFlowTo TopSecret Classified ]
+  , canFlowTo TopSecret  Classified ]
 
 -- [True,True,True,False,False,False]
 
@@ -468,11 +468,37 @@ runSetExample = runExample
 
 -- examples (maybe variants of the examples in earlier sections above)
 
-{- Encoding the 3-point label model
-topSecret  = "TopSecret" /\ "Classified" /\ "Public"
-classified = "Classified" /\ "Public"
-public     = "Public"
--}
+-- Encoding the 3-point label model
+
+topSecret  = fromList [ "TopSecret" , "Classified" , "Public" ]
+classified = fromList [ "Classified" , "Public" ]
+public     = fromList [ "Public" ]
+alice      = fromList [ "Alice" ]
+bob        = fromList [ "Bob" ]
+
+setExample0 = runSetExample $ return
+  [ canFlowTo public     topSecret
+  , canFlowTo classified classified 
+  , canFlowTo classified topSecret 
+  , canFlowTo topSecret  public
+  , canFlowTo classified public
+  , canFlowTo topSecret  classified ]
+
+setExample1 = runSetExample $ return
+  [ canFlowToP (SetPrivTCB topSecret ) topSecret  public
+  , canFlowToP (SetPrivTCB topSecret ) classified public
+  , canFlowToP (SetPrivTCB classified) classified public
+  , canFlowToP (SetPrivTCB classified) topSecret  public ]
+
+setExample2 = runSetExample $ do
+  putStrLn "Hello public world!"
+  raiseLabel alice
+  putStrLnP (SetPrivTCB alice) "hey!"
+  raiseLabel $ alice `lub` bob
+  putStrLnP (SetPrivTCB alice) "hey again!"
+-- Hello public world!
+-- Hey!
+-- *** Exception: user error (insufficient privs)
 
 
 
