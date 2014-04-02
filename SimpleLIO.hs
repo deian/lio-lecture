@@ -409,29 +409,29 @@ simpleExample8 = runSimpleExample $ do
 
 type Principal = String
 
--- SetLabel is a label model representing the set of principals to
--- whom data labeled as such is sensitive.
-newtype SetLabel = SetLabel (Set Principal)
+-- SecLabel is a label model representing the set of principals to
+-- whom data labeled as such is sensitive. Hence, a "secrecy label".
+newtype SecLabel = SecLabel (Set Principal)
                    deriving (Eq, Ord, Show)
 
-fromList :: [Principal] -> SetLabel
-fromList = SetLabel . Set.fromList
+fromList :: [Principal] -> SecLabel
+fromList = SecLabel . Set.fromList
 
-instance Label SetLabel where
+instance Label SecLabel where
   -- Information can from one entitty to another only if the data
   -- becomes more secret, i.e., there are more principals to whom this
   -- data is sensitive.
-  (SetLabel s1) `canFlowTo` (SetLabel s2) = s1 `Set.isSubsetOf` s2
+  (SecLabel s1) `canFlowTo` (SecLabel s2) = s1 `Set.isSubsetOf` s2
 
   -- Combining data from two entities means that we have to preserve
   -- the privacy of the principals from both sets.
-  (SetLabel s1) `lub` (SetLabel s2) = SetLabel $ s2 `Set.union` s2
+  (SecLabel s1) `lub` (SecLabel s2) = SecLabel $ s2 `Set.union` s2
 
 
 -- | A set privilege means that we can "speak on behalf of" the
 -- principals in the set, i.e., we can declassify the data of these
 -- principals.
-data SetPriv = SetPrivTCB (Set Principal)
+data SecPriv = SecPrivTCB (Set Principal)
   deriving Show
 
 -- To downgrade a label by a privilege, we simply remove the
@@ -439,19 +439,19 @@ data SetPriv = SetPrivTCB (Set Principal)
 -- privilege, these principals are saying that they no longer consider
 -- the data private.
 
-instance Priv SetLabel SetPriv where
-  downgradeP (SetPrivTCB p) (SetLabel s) = 
-    SetLabel $ s Set.\\ p
+instance Priv SecLabel SecPriv where
+  downgradeP (SecPrivTCB p) (SecLabel s) = 
+    SecLabel $ s Set.\\ p
 
 -- It is useful to "mint" a new privilege that let's us bypass the restrictions of
 -- a label directly.  Since set labels and privileges share the same underlying
 -- structure
-mintSetPrivTCB :: SetLabel -> SetPriv
-mintSetPrivTCB (SetLabel ps) = SetPrivTCB ps
+mintSecPrivTCB :: SecLabel -> SecPriv
+mintSecPrivTCB (SecLabel ps) = SecPrivTCB ps
 
-instance PublicAction SetLabel where publicLabel = fromList []
+instance PublicAction SecLabel where publicLabel = fromList []
 
-runSetExample :: (Show a) => LIO SetLabel a -> IO ()
+runSetExample :: (Show a) => LIO SecLabel a -> IO ()
 runSetExample = runExample
 
 -- Alice and Bob
@@ -459,8 +459,8 @@ alice       = fromList [ "Alice" ]
 bob         = fromList [ "Bob" ]
 aliceAndBob = fromList [ "Alice", "Bob" ]
 
-alicePriv = mintSetPrivTCB alice
-bobPriv   = mintSetPrivTCB bob
+alicePriv = mintSecPrivTCB alice
+bobPriv   = mintSecPrivTCB bob
 
 -- Encoding the Public/Classified/TopSecret label model
 topSecret  = fromList [ "TopSecret" , "Classified" ]
@@ -476,10 +476,10 @@ setExample0 = runSetExample $ return
   , topSecret  `canFlowTo` classified ]
 
 setExample1 = runSetExample $ return
-  [ canFlowToP (mintSetPrivTCB topSecret ) topSecret  public
-  , canFlowToP (mintSetPrivTCB topSecret ) classified public
-  , canFlowToP (mintSetPrivTCB classified) classified public
-  , canFlowToP (mintSetPrivTCB classified) topSecret  public ]
+  [ canFlowToP (mintSecPrivTCB topSecret ) topSecret  public
+  , canFlowToP (mintSecPrivTCB topSecret ) classified public
+  , canFlowToP (mintSecPrivTCB classified) classified public
+  , canFlowToP (mintSecPrivTCB classified) topSecret  public ]
 
 
 setExample0' = runSetExample $ return
@@ -516,7 +516,7 @@ setExample3 = runSetExample $ do
 -- Hello public world!
 -- Hey!
 -- *** Exception: user error (insufficient privs)
-  where allPrivs  = mintSetPrivTCB $ alice `lub` bob
+  where allPrivs  = mintSecPrivTCB $ alice `lub` bob
 
 setExample4 = runSetExample $ do
   secretVar <- newEmptyLMVar alice
@@ -613,13 +613,13 @@ setExample9 = runSetExample $ do
     s <- queryDB db "bob"
     putStrLnP bobPriv $ "Bob: " ++ s
 
-  where alicePriv = SetPrivTCB $ Set.singleton "alice"
-        bobPriv   = SetPrivTCB $ Set.singleton "bob"
+  where alicePriv = SecPrivTCB $ Set.singleton "alice"
+        bobPriv   = SecPrivTCB $ Set.singleton "bob"
 
 ----------------------------------------------------------------------
 -- Integrity (presented as a pure-integrity sets-of-principals model)
 
--- (Maybe we want to rename the SetLabel model to something like
+-- (Maybe we want to rename the SecLabel model to something like
 -- Readers so that this can have the same representation but a
 -- different name and a different behavior for the operations)
 
