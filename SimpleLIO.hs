@@ -10,6 +10,13 @@ import qualified System.IO as IO
 ----------------------------------------------------------------------
 -- Labels
 
+-- BCP: Maybe it's not nice to have "public" here.  In general, I'd
+-- argue it's a good extension, but perhaps extending LIO is not a
+-- good idea here because then the students will expect to see things
+-- in LIO that are not there.  Best if our SimpleLIO is a strict
+-- subset.  But then I need some advice what's the best way to deal
+-- with putStrLn below...
+
 class (Eq l, Show l) => Label l where
     -- Relation that dictates how information flows
     canFlowTo :: l -> l -> Bool
@@ -128,7 +135,7 @@ getLabel = LIO $ \l -> return (l,l)
 
 data Labeled l t = LabeledTCB l t
 
--- label requires value label to be above current label
+-- `label` requires value label to be above current label
 label :: Label l => l -> a -> LIO l (Labeled l a)
 label l x = LIO $ \l -> return (LabeledTCB l x, l)
 
@@ -144,12 +151,26 @@ unlabel (LabeledTCB l' x) = LIO $ \l -> return (x, l `lub` l')
 unlabelP :: Priv l p => p -> Labeled l a -> LIO l a
 unlabelP p (LabeledTCB l' x) = LIO $ \l -> return (x, l `lub` downgradeP p l')
 
--- lifting IO actions into LIO — in particular, IORefs
--- examples
+-- Examples...
+
+-- (simple functional-programming examples where we create a secret,
+-- print something to stdout, then unlabel the secret and notice that
+-- we can't print any more)
+
+----------------------------------------------------------------------
+
+-- lifting IORefs into LIO
+
+-- examples showing how the current label interacts with the label in
+-- an LIORef
 
 -- lifting concurrency primitives into LIO
--- examples
+-- examples (like the one at the end of the lecture)
 
+-- lifting MVars into LIO
+-- more examples -- e.g., maybe a password checker
+
+----------------------------------------------------------------------
 ----------------------------------------------------------------------
 -- the “sets of principals" label model
 
