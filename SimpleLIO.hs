@@ -107,6 +107,7 @@ guardWrite l = do
 -- (In a real implementation, we would not raise an error that halts
 -- the whole program; we would throw an exception that can be caught
 -- and recovered from.)
+
 liftIOTCB :: Label l => IO a -> LIO l a
 liftIOTCB = LIOTCB . lift
 
@@ -132,14 +133,14 @@ main = do
 
 -}
 
--- We can already have a simple example here of running a function
--- that tries to print a string with the current label set to either
--- Public or Classified...
 putStrLn :: Label l => String -> LIO l ()
 putStrLn s = do guardWrite public
                 liftIOTCB $ IO.putStrLn s
   
 
+-- We can already have a simple example here of running a function
+-- that tries to print a string with the current label set to either
+-- Public or Classified (using raiseLabel to raise the label)...
 
 ----------------------------------------------------------------------
 -- LIORef
