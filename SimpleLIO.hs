@@ -7,25 +7,20 @@
 import Control.Monad (unless)
 import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.Class (lift)
+import Data.Monoid
 import Data.Set (Set)
-import Data.IORef
 import qualified Data.Set as Set
+import Data.IORef
 import qualified System.IO as IO
 
 ----------------------------------------------------------------------
 -- Labels
 
--- BCP: Maybe it's not nice to have "public" here.  In general, I'd
--- argue it's a good extension, but perhaps extending LIO is not a
--- good idea here because then the students will expect to see things
--- in LIO that are not there.  Best if our SimpleLIO is a strict
--- subset.  But then I need some advice what's the best way to deal
--- with putStrLn below...
-
 class (Eq l, Show l) => Label l where
-    -- Relation that dictates how information flows
+    -- | Relation that dictates how information flows
     canFlowTo :: l -> l -> Bool
-    lub :: l -> l -> l -- Least upper bound
+    -- | Least upper bound
+    lub       :: l -> l -> l
 
 data SimpleLabel = Public | Classified | TopSecret 
                    deriving (Eq, Ord, Show)
@@ -39,13 +34,32 @@ instance Label SimpleLabel where
 ----------------------------------------------------------------------
 -- Privileges
 
-class Label l => Priv l p where
+class (Label l, Monoid p) => Priv l p where
+  -- | Dowgrade the label as much as possible (to the bottom element)
+  -- using the supplied privileges
   downgradeP :: p -> l -> l
+  -- | Relation that dictates how information flows, taking privileges
+  -- into consideration
   canFlowToP :: p -> l -> l -> Bool
-  -- default implementation of canFlowToP
+  -- | Default implementation of canFlowToP
   canFlowToP p l1 l2 = (downgradeP p l1) `canFlowTo` l2
 
+-- Above, note that privileges @p@ are expected to be monoid. This is
+-- because it's useful to have a notion the empty privivilege and how
+-- to combine privileges.
+
+-- A simple privilege just wraps a label. For the SimpleLabel model
+-- this corresponds to a classification: if you have the TopSecret
+-- privilege you can declassify any kind of data, with Classified
+-- privilege you can declassify only data at your level; with Public
+-- privilege you cannot declassify anything.
+
 data SimplePriv = SimplePrivTCB SimpleLabel
+
+instance Monoid SimplePriv where
+  mempty = SimplePrivTCB $ Public
+  (SimplePrivTCB p1) `mappend` (SimplePrivTCB p2) = SimplePrivTCB $ p1 `lub` p2
+
 
 -- The "TCB" here (and below) indicates that, in a real system, this
 -- constructor would not be made available to untrusted user code.
@@ -76,35 +90,80 @@ False
 ~~~
 -}
 
+
+-- Below we're going to define the LIO monad. Since certain actions
+-- require privileges to be permisive we define a privilege type
+-- 'NoPriv' corresponding to the empty privilege, regardless of the
+-- label type.
+--
+
+data NoPriv = NoPriv
+
+instance Monoid NoPriv where
+  mempty       = NoPriv
+  mappend  _ _ = NoPriv
+
+instance Label l => Priv l NoPriv where
+  downgradeP _ l = l
+
 ----------------------------------------------------------------------
 -- the LIO monad
 
+
+-- | The LIO monad is a state monad wrapping the IO monad
 newtype LIO l a = LIOTCB { unLIOTCB :: StateT l IO a }
                   deriving (Functor, Monad)
 
--- | Run an LIO action with current label set to @l@.
+-- | Execute an LIO action with initial current label set to @l@.
 runLIO :: LIO l a -> l -> IO (a, l)
 runLIO lioAct l = runStateT (unLIOTCB lioAct) l
+
+-- In general, it is useful to figure out what the current label of
+-- the computation is; we're going to use this when we check where an
+-- LIO computation can write.
 
 getLabel :: LIO l l
 getLabel = LIOTCB . StateT $ \l -> return (l, l)
 
-setLabelTCB :: l -> LIO l ()
-setLabelTCB l = LIOTCB . StateT $ \_ -> return ((), l)
+-- Similarly, we want to modify the current labe. Different form
+-- getLabel, setLabelP only sets the current label to the supplied
+-- label if it is above it, taking the supplied privileges into
+-- consideration.
+
+setLabelP :: Priv l p => p -> l -> LIO l ()
+setLabelP priv l = do
+ lcur <- getLabel
+ unless (canFlowToP priv lcur l) $ fail "insufficient privs"
+ LIOTCB . StateT $ \_ -> return ((), l)
+
+-- While setLabelP can be used to lower the current label, privileges
+-- prmitting, we usually want to raise the current label to allow
+-- reading more sensitive data.
 
 raiseLabel :: Label l => l -> LIO l ()
 raiseLabel l = do 
  lcur <- getLabel
- setLabelTCB $ lcur `lub` l
+ setLabelP NoPriv $ lcur `lub` l
+
+-- We call 'raiseLabel l' before reading any data at level 'l', this
+-- ensures that the current label always protects whatever is in
+-- scope. Similarly, we want to make sure that whenever we write any
+-- data that the data from the current context is not leaked. To this
+-- end we use guardWrite:
 
 guardWrite :: Label l => l -> LIO l ()
 guardWrite l = do 
  lcur <- getLabel
  unless (lcur `canFlowTo` l) $ fail "write not allowed"
 
+-- We call 'guardWrite l' before we write to an object labeled 'l'.
 -- (In a real implementation, we would not raise an error that halts
 -- the whole program; we would throw an exception that can be caught
 -- and recovered from.)
+
+-- To actually perform some effects, we want to just use the existing
+-- IO library (as opposed to implementing them in a purely funtional
+-- way atop LIO).
 
 liftIOTCB :: Label l => IO a -> LIO l a
 liftIOTCB = LIOTCB . lift
@@ -131,23 +190,37 @@ main = do
 
 -}
 
--- Public actions
+-- As a first example of an IO function, let's lift putStrLn. While we
+-- can defined it as
+--
+--    putStrLn s = do guardWrite Public
+--                    liftIOTCB $ IO.putStrLn s
+--
+-- this would not let us use putStrLn with other lbel models. So,
+-- let's define a set of public LIO actions
 
 class Label l => PublicAction l where
+
+  -- We consider these channels as public so let's assume the
+  -- existence of a puclid label.
   publicLabel :: l
+
 
   putStrLn :: String -> LIO l ()
   -- Default implementation
   putStrLn s = do guardWrite publicLabel
                   liftIOTCB $ IO.putStrLn s
-  
 
+  getLine :: LIO l String
+  getLine = do raiseLabel publicLabel
+               liftIOTCB $ IO.getLine
+  
 instance PublicAction SimpleLabel where publicLabel = Public
+
 
 -- We can already have a simple example here of running a function
 -- that tries to print a string with the current label set to either
 -- Public or Classified (using raiseLabel to raise the label)...
-
 ----------------------------------------------------------------------
 -- LIORef
 
@@ -170,12 +243,6 @@ writeLIORef (LIORefTCB l ref) x = do
 
 -- examples showing how the current label interacts with the label in
 -- an LIORef  (make a secret, read it, try to print a message)
-
--- lifting concurrency primitives into LIO
--- examples (like the one at the end of the lecture)
-
--- lifting MVars into LIO
--- more examples -- e.g., maybe a password checker
 
 ----------------------------------------------------------------------
 -- Labeled values
@@ -211,29 +278,63 @@ unlabelP p (LabeledTCB l x) = do
 -- we can't print any more)
 
 ----------------------------------------------------------------------
+-- lifting concurrency primitives into LIO
+-- examples (like the one at the end of the lecture)
+
+-- lifting MVars into LIO
+-- more examples -- e.g., maybe a password checker
+
+----------------------------------------------------------------------
 ----------------------------------------------------------------------
 -- the “sets of principals" label model
 
 type Principal = String
 
+-- SetLabel econdes a label model representing the set of principals
+-- to whom data labeled as such is sensitive.
 newtype SetLabel = SetLabel (Set Principal)
                    deriving (Eq, Ord, Show)
 
+fromList :: [Principal] -> SetLabel
+fromList = SetLabel . Set.fromList
+
+
 instance Label SetLabel where
-  (SetLabel s1) `canFlowTo` (SetLabel s2) = s2 `Set.isSubsetOf` s1
-  (SetLabel s1) `lub` (SetLabel s2) = SetLabel $ s2 `Set.union` s1
+  -- Information can from one entitty to another only if the data
+  -- becomes more secret, i.e., there are more principals to whom this
+  -- data is sensitive.
+  (SetLabel s1) `canFlowTo` (SetLabel s2) = s1 `Set.isSubsetOf` s2
+
+  -- Combining data from two entities means that we have to preserve
+  -- the privacy of the principals from both sets.
+  (SetLabel s1) `lub` (SetLabel s2) = SetLabel $ s2 `Set.union` s2
 
 
-data PrincipalPriv = PrincipalPrivTCB Principal
+-- | A set privilege means that we can "speak on behalf of" the
+-- principals in the set, i.e., we can declassify the data of these
+-- principals.
+data SetPriv = SetPrivTCB SetLabel
 
-instance Priv SetLabel PrincipalPriv where
-  downgradeP (PrincipalPrivTCB p) (SetLabel s) = SetLabel $ Set.delete p s
+-- Here we wrapped SetLabel as opposed to 'Set Principal' for
+-- simplicity.
 
--- | Helper function for converting a list of principals into a label
-setLabel :: [Principal] -> SetLabel
-setLabel = SetLabel . Set.fromList
+instance Monoid SetPriv where
+  -- The empty privilege means we're not speaking on behalf of anybody
+  mempty = SetPrivTCB . SetLabel $ Set.empty
 
-instance PublicAction SetLabel where publicLabel = setLabel []
+  -- The combination of set privilege amounts to simply cominging the
+  -- underlying set of principals
+  (SetPrivTCB p1) `mappend` (SetPrivTCB p2) = SetPrivTCB $ p1 `lub` p2
+
+
+-- When we downgrade a label we simply remove the privilege principals
+-- from the label; by exercising this privilege, these principals are
+-- saying that they no longer consider the data private.
+
+instance Priv SetLabel SetPriv where
+  downgradeP (SetPrivTCB (SetLabel p)) (SetLabel s) = SetLabel $ s Set.\\ p
+
+instance PublicAction SetLabel where publicLabel = fromList []
 
 -- examples (maybe variants of the examples in earlier sections above)
 
