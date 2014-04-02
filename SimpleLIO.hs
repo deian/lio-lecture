@@ -18,6 +18,8 @@ instance Label SimpleLabel where
   x `canFlowTo` y = x <= y
   lub = max
 
+-- examples
+
 ----------------------------------------------------------------------
 -- Privileges
 
@@ -37,9 +39,6 @@ instance PrivDesc SimpleLabel SimplePriv where
 -- examples
 
 ----------------------------------------------------------------------
--- the “sets of principals" label model
-
-----------------------------------------------------------------------
 -- the LIO monad
 
 -- simplified version of the LIO monad (with no IORef! :-) and no clearance)
@@ -49,6 +48,11 @@ instance PrivDesc SimpleLabel SimplePriv where
 
 -- lifting concurrency primitives into LIO
 -- examples
+
+----------------------------------------------------------------------
+-- the “sets of principals" label model
+
+-- examples (maybe variants of the examples above)
 
 ----------------------------------------------------------------------
 -- Integrity
