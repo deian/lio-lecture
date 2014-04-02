@@ -193,6 +193,7 @@ liftIOTCB = LIOTCB . lift
 -- As a first example, let's lift putStrLn into LIO. While we could
 -- defined it as
 --
+--    putStrLn :: String -> LIO SimpleLabel ()
 --    putStrLn s = do guardWrite Public
 --                    liftIOTCB $ IO.putStrLn s
 --
@@ -297,6 +298,16 @@ simpleExample6 = runSimpleExample $ do
 -- Wouldn't you like to know.
 -- *** Exception: user error (write not allowed)
 
+simpleExample6a = runSimpleExample $ do
+  aliceSecret <- newLIORef TopSecret ""
+  -- as alice:
+  putStrLn "<alice<"
+  secret <- getLine
+  writeLIORef aliceSecret secret
+  -- as the messenger:
+  -- msg <- readLIORef aliceSecret
+  putStrLn $ "Intercepted message: " ++ show secret
+
 -- (In the above example, the "as alice" and "as messenger" actions
 -- are actually all running in the same thread.  More realistically,
 -- they would actually be running in separate threads, all
@@ -314,8 +325,7 @@ simpleExample7 = runSimpleExample $ do
   msg <- readLIORef aliceSecret
   writeLIORef bobSecret $ msg
   -- as bob:
-  do msg <- readLIORef aliceSecret
-     -- (could also use putStrLnP...)
+  do msg <- readLIORef bobSecret
      lcur <- getLabel
      setLabelP (SimplePrivTCB TopSecret) Public
      putStrLn $ ">bob> " ++ msg
@@ -378,6 +388,7 @@ putLMVar :: Label l => LMVar l a -> a -> LIO l ()
 putLMVar = putLMVarP NoPriv
 
 
+-- BCP: Does it work?
 simpleExample8 = runSimpleExample $ do
   aliceSecret <- newEmptyLMVar TopSecret
   bobSecret <- newEmptyLMVar TopSecret
