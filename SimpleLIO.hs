@@ -613,9 +613,6 @@ setExample9 = runSetExample $ do
     s <- queryDB db "bob"
     putStrLnP bobPriv $ "Bob: " ++ s
 
-  where alicePriv = SecPrivTCB $ Set.singleton "alice"
-        bobPriv   = SecPrivTCB $ Set.singleton "bob"
-
 ----------------------------------------------------------------------
 -- Integrity (presented as a pure-integrity sets-of-principals model)
 
