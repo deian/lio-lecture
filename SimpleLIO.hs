@@ -458,6 +458,9 @@ runSetExample = runExample
 alice      = fromList [ "Alice" ]
 bob        = fromList [ "Bob" ]
 
+alicePriv = mintSetPrivTCB alice
+bobPriv   = mintSetPrivTCB bob
+
 -- Encoding the Public/Classified/TopSecret label model
 topSecret  = fromList [ "TopSecret" , "Classified" , "Public" ]
 classified = fromList [ "Classified" , "Public" ]
@@ -486,7 +489,6 @@ setExample2 = runSetExample $ do
 -- Hello public world!
 -- Hey!
 -- *** Exception: user error (insufficient privs)
-  where alicePriv = SetPrivTCB $ Set.singleton "alice"
 
 setExample3 = runSetExample $ do
   putStrLn "Hello public world!"
@@ -497,8 +499,7 @@ setExample3 = runSetExample $ do
 -- Hello public world!
 -- Hey!
 -- *** Exception: user error (insufficient privs)
-  where alicePriv = mintSetPrivTCB alice
-        allPrivs  = mintSetPrivTCB $ alice `lub` bob
+  where allPrivs  = mintSetPrivTCB $ alice `lub` bob
 
 setExample4 = runSetExample $ do
   secretVar <- newEmptyLMVar alice
@@ -512,7 +513,6 @@ setExample4 = runSetExample $ do
     putStrLnP bobPriv "I'll wait for a message from Alice"
     secret <- takeLMVarP bobPriv secretVar
     putStrLnP bobPriv secret -- This will fail!
-  where bobPriv = mintSetPrivTCB bob
 
 
 ----------------------------------------------------------------------
