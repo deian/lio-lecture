@@ -387,10 +387,10 @@ putLMVar :: Label l => LMVar l a -> a -> LIO l ()
 putLMVar = putLMVarP NoPriv
 
 
--- BCP: Does it work?
+-- BCP: Does it work? DS: Yep, added comment where it fails
 simpleExample8 = runSimpleExample $ do
   aliceSecret <- newEmptyLMVar TopSecret
-  bobSecret <- newEmptyLMVar TopSecret
+  bobSecret   <- newEmptyLMVar TopSecret
   -- as alice:
   forkLIO $ do putStrLn "<alice<"
                secret <- getLine
@@ -401,7 +401,7 @@ simpleExample8 = runSimpleExample $ do
                putLMVar bobSecret ""
   -- as the messenger:
   msg <- takeLMVar bobSecret
-  putStrLn $ "Intercepted message: " ++ show msg
+  putStrLn $ "Intercepted message: " ++ show msg  -- This will fail!
 -- *Main> simpleExample8
 -- <alice<
 -- hey
@@ -542,7 +542,7 @@ secExample4 = runSecExample $ do
   forkLIO $ do
     raiseLabel bob
     putStrLnP bobPriv "I'll wait for a message from Alice"
-    secret <- takeLMVarP bobPriv secretVar  -- BCP: This succeeds, yes?
+    secret <- takeLMVarP bobPriv secretVar  -- BCP: This succeeds, yes? DS: Yes
     putStrLnP bobPriv secret -- This will fail!
 
 
