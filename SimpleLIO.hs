@@ -58,15 +58,6 @@ class Label l => Priv l p where
   -- | Default implementation of canFlowToP
   canFlowToP p l1 l2 = (downgradeP p l1) `canFlowTo` l2
 
--- Note that privileges p are expected to be monoid. This is because
--- it's useful to have a notion of empty privilege and how to combine
--- privileges.
-
--- BCP: But note that we don't actually use any of the monoid
--- operations in this file.  Are they used in the HW / tutorial?
--- (Yes, in just a couple of places.  Maybe these could be simplified
--- away??)
-
 -- A simple privilege just wraps a label. For the SimpleLabel model
 -- this corresponds to a classification: if you have the TopSecret
 -- privilege you can declassify any kind of data, with Classified
