@@ -41,9 +41,6 @@ instance Label SimpleLabel where
 ----------------------------------------------------------------------
 -- Privileges
 
--- BCP: Do we really need the distinction between privileges and
--- privilege descriptions??
-
 class Label l => Priv l p where
   downgradeP :: p -> l -> l
   canFlowToP :: p -> l -> l -> Bool
@@ -52,8 +49,8 @@ class Label l => Priv l p where
 
 data SimplePriv = SimplePrivTCB SimpleLabel
 
--- The "TCB" here indicates that, in a real system, this constructor
--- would not be made available to untrusted user code.
+-- The "TCB" here (and below) indicates that, in a real system, this
+-- constructor would not be made available to untrusted user code.
 
 instance Priv SimpleLabel SimplePriv where
   downgradeP (SimplePrivTCB priv) lbl =
@@ -175,12 +172,6 @@ writeLIORef (LIORefTCB l ref) x = do
 
 ----------------------------------------------------------------------
 -- Labeled values
-
--- BCP: Wondering whether it's simpler to present this bit first or
--- whether it's simpler to introduce LIORefs first.  I think probably
--- LIORefs should go first (so I've moved this later).  LIORefs
--- involves refs, but that's something they've seen before.  Labeled
--- data is more unfamiliar in this context.
 
 data Labeled l t = LabeledTCB l t
 
