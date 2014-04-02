@@ -38,13 +38,71 @@ instance PrivDesc SimpleLabel SimplePriv where
     if priv >= lbl then Public
       else lbl
 
--- canFlowToP
 -- examples
+
+{- 
+~~~
+*Main> canFlowToP (SimplePriv TopSecret)
+                  (SimpleLabel TopSecret)
+                  (SimpleLabel Public)
+True
+
+*Main> canFlowToP (SimplePriv TopSecret)
+                  (SimpleLabel Classified)
+                  (SimpleLabel Public)
+True
+
+*Main> canFlowToP (SimplePriv Classified)
+                  (SimpleLabel TopSecret)
+                  (SimpleLabel Public)
+False
+~~~
+-}
 
 ----------------------------------------------------------------------
 -- the LIO monad
 
--- simplified version of the LIO monad (with no IORef! :-) and no clearance)
+data LIOState l = LIOState { lioCurrentLabel :: l }
+newtype LIO l a = LIO { unLIO :: (LIOState l) -> IO a }
+
+instance Monad (LIO l) where
+  return x = LIO $ \l -> return x
+
+{- 
+initCurLabel :: LIOState MilLabel
+initCurLabel = 
+  LIOState { lioLabel = MilLabel Public (set [])
+           , lioClearance = MilLabel TopSecret (set [Crypto, Nuclear]) }
+
+mainLIO :: LIO MilLabel String
+mainLIO = do
+  lc <- label (MilLabel Classified (set [Crypto])) "w00t"
+  c <- unlabel lc
+  lts <- label (MilLabel TopSecret (set [Crypto, Nuclear])) $ 
+            c ++ ";cbc-nuke-128"
+  ts <- unlabel lts
+  -- label (MilLabel TopSecret (set [Nuclear])) $ "leaking...crypto: " ++ ts
+  return ts
+
+main = do
+  res <- runLIO mainLIO initCurLabel 
+  print res
+
+-}
+
+-- simplified version of the LIO monad
+
+
+-- labeled values
+
+data Labeled l t = Labeled l t
+
+{-
+label :: Label l => l -> a -> LIO l (Labeled l a)
+unlabel :: (Label l) => Labeled l a -> LIO l a
+unlabelP :: Priv l p => p -> Labeled l a -> LIO l a
+labelOf  :: Labeled l a -> l
+-}
 
 -- lifting IO actions into LIO — in particular, IORefs
 -- examples
@@ -72,6 +130,12 @@ instance PrivDesc SetLabel PrincipalPriv where
 
 
 -- examples (maybe variants of the examples above)
+
+{-
+topSecret  = "TopSecret" /\ "Classified" /\ "Public"
+classified = "Classified" /\ "Public"
+public     = "Public"
+-}
 
 ----------------------------------------------------------------------
 -- Integrity
