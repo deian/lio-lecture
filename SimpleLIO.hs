@@ -48,7 +48,7 @@ simpleExample0 =
 ----------------------------------------------------------------------
 -- Privileges
 
-class Label l => Priv l p where
+class (Label l, Show p) => Priv l p where
   -- | Dowgrade the label as much as possible (to the bottom element)
   -- using the supplied privileges
   downgradeP :: p -> l -> l
@@ -65,6 +65,7 @@ class Label l => Priv l p where
 -- privilege you cannot declassify anything.
 
 data SimplePriv = SimplePrivTCB SimpleLabel
+  deriving Show
 
 -- The "TCB" here (and below) indicates that, in a real system, this
 -- constructor would not be made available to untrusted user code.
@@ -92,6 +93,7 @@ simpleExample1 =
 -- (there are only a few).
 
 data NoPriv = NoPriv
+  deriving Show
 
 instance Label l => Priv l NoPriv where
   downgradeP _ l = l
@@ -171,7 +173,10 @@ raiseLabel = raiseLabelP NoPriv
 guardWriteP :: Priv l p => p -> l -> LIO l ()
 guardWriteP p l = do 
  lcur <- getLabel
- unless (canFlowToP p lcur l) $ fail "write not allowed"
+ unless (canFlowToP p lcur l) $ 
+   fail ("write from " ++ (show lcur) ++ 
+         " to " ++ (show l) ++ 
+         " not allowed with privilege " ++ (show p))
 
 guardWrite :: Label l => l -> LIO l ()
 guardWrite = guardWriteP NoPriv
@@ -427,6 +432,7 @@ instance Label SetLabel where
 -- principals in the set, i.e., we can declassify the data of these
 -- principals.
 data SetPriv = SetPrivTCB (Set Principal)
+  deriving Show
 
 -- To downgrade a label by a privilege, we simply remove the
 -- privilege's principals from the label; by exercising this
@@ -451,9 +457,6 @@ runSetExample = runExample
 -- Alice and Bob
 alice      = fromList [ "Alice" ]
 bob        = fromList [ "Bob" ]
-
-alicePriv = SetPrivTCB alice
-bobPriv   = SetPrivTCB bob
 
 -- Encoding the Public/Classified/TopSecret label model
 topSecret  = fromList [ "TopSecret" , "Classified" , "Public" ]
@@ -577,25 +580,26 @@ queryDB db prin = do
                   return r
 
 setExample9 = runSetExample $ do
-  db <- newEmptyLMVarP NoPriv public
+  db <- newLMVarP NoPriv public $ Map.empty
   -- First alice thread:
   forkLIO $ do
-    raiseLabel alice
     updateDB db "alice" alice "Alice's big secret"
+{-
   -- Second alice thread:
   forkLIO $ do
-    raiseLabel alice
     s <- queryDB db "alice"
     putStrLnP alicePriv $ "Alice: " ++ s
   -- First bob thread:
   forkLIO $ do
-    raiseLabel bob
     updateDB db "bob" bob "Bob's even bigger secret"
   -- Second bob thread:
   forkLIO $ do
-    raiseLabel alice
-    s <- queryDB db "alice"
-    putStrLnP alicePriv $ "Alice: " ++ s
+    s <- queryDB db "bob"
+    putStrLnP bobPriv $ "Bob: " ++ s
+-}
+
+  where alicePriv = SetPrivTCB $ Set.singleton "alice"
+        bobPriv   = SetPrivTCB $ Set.singleton "bob"
 
 ----------------------------------------------------------------------
 -- Integrity (presented as a pure-integrity sets-of-principals model)
