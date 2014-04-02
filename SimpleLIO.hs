@@ -62,12 +62,14 @@ False
 ----------------------------------------------------------------------
 -- the LIO monad
 
-data LIOState l = LIOState { lioCurrentLabel :: l }
-newtype LIO l a = LIO { unLIO :: (LIOState l) -> IO a }
+newtype LIO l a = LIO { unLIO :: l -> IO (a, l) }
 
 instance Monad (LIO l) where
-  return x = LIO $ \l -> return x
+  return x = LIO $ \l -> return (x,l)
 
+  a >>= f = LIO $ \l -> do (r,l') <- unLIO a l
+                           unLIO (f r) l'
+                           
 {- 
 initCurLabel :: LIOState MilLabel
 initCurLabel = 
