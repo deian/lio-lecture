@@ -4,7 +4,7 @@
     UndecidableInstances, FlexibleContexts, TypeSynonymInstances,
     GeneralizedNewtypeDeriving #-}
 
-import Prelude hiding (putStrLn)
+import Prelude hiding (putStrLn, getLine)
 import Control.Monad (unless)
 import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.Class (lift)
@@ -262,8 +262,44 @@ writeLIORef (LIORefTCB l ref) x = do
   guardWrite l
   liftIOTCB $ writeIORef ref x
 
--- examples showing how the current label interacts with the label in
--- an LIORef  (make a secret, read it, try to print a message)
+simpleExample6 = runSimpleExample $ do
+  putin <- newLIORef TopSecret Nothing
+  -- as putin:
+  tsRef <- do putStrLn "<putin<"
+              secret <- getLine
+              writeLIORef putin $ Just secret
+  -- as the messenger:
+  msg <- readLIORef putin
+  putStrLn $ "Intercepted message: " ++ show msg
+-- <putin<
+-- Wouldn't you like to know.
+-- *** Exception: user error (write not allowed)
+
+simpleExample7 = runSimpleExample $ do
+  putin <- newLIORef TopSecret Nothing
+  obama <- newLIORef TopSecret Nothing
+  -- as putin:
+  tsRef <- do putStrLn "<putin<"
+              secret <- getLine
+              writeLIORef putin $ Just secret
+  -- as the messenger:
+  msg <- readLIORef putin
+  writeLIORef obama $ msg
+  -- as obama:
+  do mmsg <- readLIORef putin
+     case mmsg of
+       Just msg -> do lcur <- getLabel
+                      setLabelP (SimplePrivTCB TopSecret) Public
+                      putStrLn $ ">obama> " ++ msg
+                      raiseLabel lcur
+       _ -> return ()
+  -- as the messenger:
+  putStrLn $ "Intercepted message: " ++ show msg
+-- <putin<
+-- Woudln't you like to know.
+-- >obama> Woudln't you like to know
+-- *** Exception: user error (write not allowed)
+
 
 ----------------------------------------------------------------------
 -- Labeled values
@@ -297,6 +333,9 @@ unlabelP p (LabeledTCB l x) = do
 -- (simple functional-programming examples where we create a secret,
 -- print something to stdout, then unlabel the secret and notice that
 -- we can't print any more)
+--
+-- DS: maybe just modify the ref examples to use 
+-- getLine' :: Label l => l -> LIO l (Labeled l String)
 
 ----------------------------------------------------------------------
 -- lifting concurrency primitives into LIO
