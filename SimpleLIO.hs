@@ -3,6 +3,9 @@
 {-# LANGUAGE FlexibleInstances, MultiParamTypeClasses, 
     UndecidableInstances, FlexibleContexts, TypeSynonymInstances #-}
 
+import Data.Set (Set)
+import qualified Data.Set as Set
+
 ----------------------------------------------------------------------
 -- Labels
 
@@ -25,12 +28,12 @@ instance Label SimpleLabel where
 
 class Label l => PrivDesc l p where
   canFlowToP :: p -> l -> l -> Bool
+  canFlowToP p l1 l2 = (downgradeP p l1) `canFlowTo` l2
   downgradeP :: p -> l -> l
 
 data SimplePriv = SimplePriv SimpleLabel
 
 instance PrivDesc SimpleLabel SimplePriv where
-  canFlowToP p l1 l2 = (downgradeP p l1) `canFlowTo` l2
   downgradeP (SimplePriv priv) lbl =
     if priv >= lbl then Public
       else lbl
@@ -51,6 +54,22 @@ instance PrivDesc SimpleLabel SimplePriv where
 
 ----------------------------------------------------------------------
 -- the “sets of principals" label model
+
+type Principal = String
+
+newtype SetLabel = SetLabel (Set Principal)
+                   deriving (Eq, Ord, Show)
+
+instance Label SetLabel where
+  (SetLabel s1) `canFlowTo` (SetLabel s2) = s2 `Set.isSubsetOf` s1
+  (SetLabel s1) `lub` (SetLabel s2) = SetLabel $ s2 `Set.union` s1
+
+
+data PrincipalPriv = PrincipalPriv Principal
+
+instance PrivDesc SetLabel PrincipalPriv where
+  downgradeP (PrincipalPriv p) (SetLabel s) = SetLabel $ Set.delete p s
+
 
 -- examples (maybe variants of the examples above)
 
