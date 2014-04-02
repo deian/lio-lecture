@@ -399,9 +399,9 @@ simpleExample8 = runSimpleExample $ do
 -- *** Exception: user error (write not allowed)
 
 -- (Morally, the messenger should also be in a separate thread, but if
--- we write the example that way, this thread runs and fails, aborting
--- the whole program, before either of the other threads have a chance
--- to do anything interesting!)
+-- we write the example that way, this thread runs and fails before
+-- either of the other threads have a chance to do anything
+-- interesting!)
 
 
 ----------------------------------------------------------------------
@@ -463,9 +463,9 @@ alicePriv = mintSetPrivTCB alice
 bobPriv   = mintSetPrivTCB bob
 
 -- Encoding the Public/Classified/TopSecret label model
-topSecret  = fromList [ "TopSecret" , "Classified" , "Public" ]
-classified = fromList [ "Classified" , "Public" ]
-public     = fromList [ "Public" ]
+topSecret  = fromList [ "TopSecret" , "Classified" ]
+classified = fromList [ "Classified" ]
+public     = fromList [ ]
 
 setExample0 = runSetExample $ return
   [ public     `canFlowTo` topSecret
@@ -601,7 +601,6 @@ setExample9 = runSetExample $ do
   -- First alice thread:
   forkLIO $ do
     updateDB db "alice" alice "Alice's big secret"
-{-
   -- Second alice thread:
   forkLIO $ do
     s <- queryDB db "alice"
@@ -613,7 +612,6 @@ setExample9 = runSetExample $ do
   forkLIO $ do
     s <- queryDB db "bob"
     putStrLnP bobPriv $ "Bob: " ++ s
--}
 
   where alicePriv = SetPrivTCB $ Set.singleton "alice"
         bobPriv   = SetPrivTCB $ Set.singleton "bob"
