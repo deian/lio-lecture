@@ -1,4 +1,7 @@
-{-# OPTIONS_GHC  -fno-warn-unused-binds -fno-warn-unused-matches 
+-- A Simplified Presentation of LIO
+-- By Benjamin Pierce and Deian Stefan
+
+{-# OPTIONS_GHC -fno-warn-unused-binds -fno-warn-unused-matches 
   -fno-warn-name-shadowing -fno-warn-missing-signatures #-}
 {-# LANGUAGE FlexibleInstances, MultiParamTypeClasses, 
     UndecidableInstances, FlexibleContexts, TypeSynonymInstances,
@@ -32,16 +35,13 @@ instance Label SimpleLabel where
   x `canFlowTo` y = x <= y
   lub = max
 
--- examples
-
-simpleExample0 = runSimpleExample $ return
-  [ canFlowTo Public     TopSecret
-  , canFlowTo Classified Classified 
-  , canFlowTo Classified TopSecret 
-  , canFlowTo TopSecret  Public
-  , canFlowTo Classified Public
-  , canFlowTo TopSecret  Classified ]
-
+simpleExample0 = 
+  [ Public     `canFlowTo` TopSecret
+  , Classified `canFlowTo` Classified 
+  , Classified `canFlowTo` TopSecret 
+  , TopSecret  `canFlowTo` Public
+  , Classified `canFlowTo` Public
+  , TopSecret  `canFlowTo` Classified ]
 -- [True,True,True,False,False,False]
 
 ----------------------------------------------------------------------
@@ -57,9 +57,14 @@ class (Label l, Monoid p) => Priv l p where
   -- | Default implementation of canFlowToP
   canFlowToP p l1 l2 = (downgradeP p l1) `canFlowTo` l2
 
--- Above, note that privileges @p@ are expected to be monoid. This is
--- because it's useful to have a notion the empty privivilege and how
--- to combine privileges.
+-- Note that privileges @p@ are expected to be monoid. This is because
+-- it's useful to have a notion of empty privilege and how to combine
+-- privileges.
+
+-- BCP: But note that we don't actually use any of the monoid
+-- operations in this file.  Are they used in the HW / tutorial?
+-- (Yes, in just a couple of places.  Maybe these could be simplified
+-- away??)
 
 -- A simple privilege just wraps a label. For the SimpleLabel model
 -- this corresponds to a classification: if you have the TopSecret
@@ -69,38 +74,34 @@ class (Label l, Monoid p) => Priv l p where
 
 data SimplePriv = SimplePrivTCB SimpleLabel
 
+-- The "TCB" here (and below) indicates that, in a real system, this
+-- constructor would not be made available to untrusted user code.
+
 instance Monoid SimplePriv where
   mempty = SimplePrivTCB $ Public
   (SimplePrivTCB p1) `mappend` (SimplePrivTCB p2) = SimplePrivTCB $ p1 `lub` p2
-
-
--- The "TCB" here (and below) indicates that, in a real system, this
--- constructor would not be made available to untrusted user code.
 
 instance Priv SimpleLabel SimplePriv where
   downgradeP (SimplePrivTCB priv) lbl =
     if priv >= lbl then Public
       else lbl
 
--- examples
-
-simpleExample1 = runSimpleExample $ return
+simpleExample1 = 
   [ canFlowToP (SimplePrivTCB TopSecret ) TopSecret  Public
   , canFlowToP (SimplePrivTCB TopSecret ) Classified Public
   , canFlowToP (SimplePrivTCB Classified) Classified Public
   , canFlowToP (SimplePrivTCB Classified) TopSecret  Public ]
-
 -- [True,True,True,False]
 
 
-----------------------------------------------------------------------
--- No privs
+-- For some of the definitions accompanying the LIO monad below, it
+-- will be useful to have a type of "null privileges" that can be used
+-- to define unprivileged versions of privileged operations.  'NoPriv'
+-- corresponding to an empty privilege, regardless of the label type.
 
--- Below we're going to define the LIO monad. Since certain actions
--- require privileges to be permisive we define a privilege type
--- 'NoPriv' corresponding to the empty privilege, regardless of the
--- label type.
---
+-- BCP: It might be simpler just to define the no-privilege operations
+-- directly, below, rather than taking the trouble to define NoPriv
+-- (there are only a few).
 
 data NoPriv = NoPriv
 
@@ -111,20 +112,26 @@ instance Monoid NoPriv where
 instance Label l => Priv l NoPriv where
   downgradeP _ l = l
 
+simpleExample1a = 
+  [ canFlowToP NoPriv Public    TopSecret
+  , canFlowToP NoPriv TopSecret Public
+  , canFlowToP NoPriv TopSecret Classified ]
+-- [True,False,False]
+
 ----------------------------------------------------------------------
--- the LIO monad
+-- The LIO monad
 
-
--- | The LIO monad is a state monad wrapping the IO monad
+-- | The LIO monad is a state monad wrapping the IO monad and carrying
+-- a single label as the "current state"
 newtype LIO l a = LIOTCB { unLIOTCB :: StateT l IO a }
                   deriving (Functor, Monad)
 
--- | Execute an LIO action with initial current label set to @l@.
+-- | Execute an LIO action with initial "current label" set to @l@.
 runLIO :: LIO l a -> l -> IO (a, l)
 runLIO lioAct l = runStateT (unLIOTCB lioAct) l
 
--- With this, we can now give the definition for the runSimpleExample
--- wrapper we used above:
+-- It's convenient to define a wrapper that executes an LIO action and
+-- displays its final result and final label
 
 runExample :: (Show a, PublicAction l) => LIO l a -> IO ()
 runExample act = do
@@ -135,17 +142,18 @@ runExample act = do
 runSimpleExample :: (Show a) => LIO SimpleLabel a -> IO ()
 runSimpleExample = runExample
 
--- In general, it is useful to figure out what the current label of
--- the computation is; we're going to use this when we check where an
--- LIO computation can write.
+-- It's often useful to find out what the current label of the
+-- computation is; we're going to use this repeatedly to check where
+-- an LIO computation can write.  It's also sometimes useful in
+-- user-level code.
 
 getLabel :: LIO l l
 getLabel = LIOTCB . StateT $ \l -> return (l, l)
 
--- Similarly, we want to modify the current labe. Different form
--- getLabel, setLabelP only sets the current label to the supplied
--- label if it is above it, taking the supplied privileges into
--- consideration.
+-- We will also need to modify the current label. Unlike getLabel,
+-- setLabelP only sets the current label to the supplied label if the
+-- latter is above the former (taking the supplied privileges into
+-- consideration).
 
 setLabelP :: Priv l p => p -> l -> LIO l ()
 setLabelP priv l = do
@@ -153,9 +161,13 @@ setLabelP priv l = do
  unless (canFlowToP priv lcur l) $ fail "insufficient privs"
  LIOTCB . StateT $ \_ -> return ((), l)
 
--- While setLabelP can be used to lower the current label, privileges
--- prmitting, we usually want to raise the current label to allow
--- reading more sensitive data.
+-- (In a real implementation, we would not raise an error that halts
+-- the whole program; we would throw an exception that can be caught
+-- and recovered from.)
+
+-- While setLabelP can be used to lower the current label (privileges
+-- permitting), the most common case is raising the current label to
+-- allow reading more sensitive data.
 
 raiseLabelP :: Priv l p => p -> l -> LIO l ()
 raiseLabelP p l = do 
@@ -168,8 +180,8 @@ raiseLabel = raiseLabelP NoPriv
 -- We call 'raiseLabel l' before reading any data at level 'l', this
 -- ensures that the current label always protects whatever is in
 -- scope. Similarly, we want to make sure that whenever we write any
--- data that the data from the current context is not leaked. To this
--- end we use guardWrite:
+-- data that the data from the current context is not leaked. For this
+-- we use guardWrite:
 
 guardWriteP :: Priv l p => p -> l -> LIO l ()
 guardWriteP p l = do 
@@ -179,31 +191,28 @@ guardWriteP p l = do
 guardWrite :: Label l => l -> LIO l ()
 guardWrite = guardWriteP NoPriv
 
--- We call 'guardWrite l' before we write to an object labeled 'l'.
--- (In a real implementation, we would not raise an error that halts
--- the whole program; we would throw an exception that can be caught
--- and recovered from.)
+-- We will always call 'guardWrite l' before we write to an object
+-- labeled 'l'.
 
--- To actually perform some effects, we want to just use the existing
--- IO library (as opposed to implementing them in a purely funtional
--- way atop LIO).
+-- To actually perform some effects, we just use the existing IO
+-- library (as opposed to re-implementing them atop LIO).
 
 liftIOTCB :: Label l => IO a -> LIO l a
 liftIOTCB = LIOTCB . lift
 
--- As a first example of an IO function, let's lift putStrLn. While we
--- can defined it as
+-- As a first example, let's lift putStrLn into LIO. While we could
+-- defined it as
 --
 --    putStrLn s = do guardWrite Public
 --                    liftIOTCB $ IO.putStrLn s
 --
--- this would not let us use putStrLn with other lbel models. So,
--- let's define a set of public LIO actions
+-- this would not let us use putStrLn with the other label models that
+-- we are going to define later. So, let's define a typeclass of
+-- public LIO actions
 
 class Label l => PublicAction l where
-
-  -- We consider these channels as public so let's assume the
-  -- existence of a puclid label.
+  -- We consider channels like the standard output as public so we
+  -- assume the existence of a public label.
   publicLabel :: l
 
   putStrLnP :: Priv l p => p -> String -> LIO l ()
@@ -216,22 +225,25 @@ class Label l => PublicAction l where
   putStrLn = putStrLnP NoPriv
 
   getLine :: LIO l String
+  -- Default implementation
   getLine = do raiseLabelP NoPriv publicLabel
                liftIOTCB $ IO.getLine
   
+-- (Note that all the operations except publicLabel have default
+-- definitions.  That is, once we supply the value for the public
+-- label, we get all the other ones for free.)
+
 instance PublicAction SimpleLabel where publicLabel = Public
 
 simpleExample2 = runSimpleExample $ putStrLn "Hello LIO world!"
--- hey!
+-- Hello LIO world!
 -- ()
 -- => Public <=
-
 
 simpleExample3 = runSimpleExample $ do
   putStrLn "Hello LIO world!"
   raiseLabel TopSecret
   putStrLn "Edward in the house..."
-
 -- Hello LIO world!
 -- *** Exception: user error (write not allowed)
 
@@ -278,30 +290,30 @@ writeLIORef (LIORefTCB l ref) x = do
   liftIOTCB $ writeIORef ref x
 
 simpleExample6 = runSimpleExample $ do
-  alice <- newLIORef TopSecret Nothing
+  aliceSecret <- newLIORef TopSecret ""
   -- as alice:
   do putStrLn "<alice<"
      secret <- getLine
-     writeLIORef alice $ Just secret
+     writeLIORef aliceSecret secret
   -- as the messenger:
-  msg <- readLIORef alice
+  msg <- readLIORef aliceSecret
   putStrLn $ "Intercepted message: " ++ show msg
 -- <alice<
 -- Wouldn't you like to know.
 -- *** Exception: user error (write not allowed)
 
 simpleExample7 = runSimpleExample $ do
-  alice <- newLIORef TopSecret Nothing
-  bob <- newLIORef TopSecret Nothing
+  aliceSecret <- newLIORef TopSecret Nothing
+  bobSecret <- newLIORef TopSecret Nothing
   -- as alice:
   do putStrLn "<alice<"
      secret <- getLine
-     writeLIORef alice $ Just secret
+     writeLIORef aliceSecret $ Just secret
   -- as the messenger:
-  msg <- readLIORef alice
-  writeLIORef bob $ msg
+  msg <- readLIORef aliceSecret
+  writeLIORef bobSecret $ msg
   -- as bob:
-  do mmsg <- readLIORef alice
+  do mmsg <- readLIORef aliceSecret
      case mmsg of
        Just msg -> do lcur <- getLabel
                       setLabelP (SimplePrivTCB TopSecret) Public
@@ -315,6 +327,64 @@ simpleExample7 = runSimpleExample $ do
 -- >bob> Woudln't you like to know
 -- *** Exception: user error (write not allowed)
 
+
+----------------------------------------------------------------------
+-- lifting concurrency primitives into LIO
+
+forkLIO :: Label l => LIO l () -> LIO l ()
+forkLIO lioAct = do
+  l <- getLabel
+  void . liftIOTCB . forkIO $ void $ runLIO lioAct l
+
+data LMVar l a = LMVarTCB l (MVar a)
+
+newLMVarP :: Priv l p => p -> l -> a -> LIO l (LMVar l a)
+newLMVarP p l x = do
+  guardWriteP p l
+  mvar <- liftIOTCB $ newMVar x
+  return $ LMVarTCB l mvar
+
+newEmptyLMVarP :: Priv l p => p -> l -> LIO l (LMVar l a)
+newEmptyLMVarP p l = do
+  guardWriteP p l
+  mvar <- liftIOTCB $ newEmptyMVar
+  return $ LMVarTCB l mvar
+
+takeLMVarP :: Priv l p => p -> LMVar l a -> LIO l a
+takeLMVarP p (LMVarTCB l mvar) = do
+  raiseLabelP p l
+  guardWriteP p l
+  liftIOTCB $ takeMVar mvar
+
+putLMVarP :: Priv l p => p -> LMVar l a -> a -> LIO l ()
+putLMVarP p (LMVarTCB l mvar) x = do
+  raiseLabelP p l
+  guardWriteP p l
+  liftIOTCB $ putMVar mvar x
+
+-- examples (like the one at the end of the lecture)
+-- lifting MVars into LIO
+-- more examples -- e.g., maybe a password checker
+
+simpleExample8 = runSimpleExample $ do
+  aliceSecret <- newEmptyLMVarP NoPriv TopSecret
+  bobSecret <- newEmptyLMVarP NoPriv TopSecret
+  -- as alice:
+  forkLIO $ do putStrLn "<alice<"
+               secret <- getLine
+               putLMVarP NoPriv aliceSecret secret
+  -- as bob:
+  forkLIO $ do msg <- takeLMVarP (SimplePrivTCB TopSecret) aliceSecret
+               putStrLn $ ">bob> " ++ msg
+               putLMVarP NoPriv bobSecret ""
+  -- as the messenger:
+  msg <- takeLMVarP NoPriv bobSecret
+  putStrLn $ "Intercepted message: " ++ show msg
+-- *Main> simpleExample8
+-- <alice<
+-- hey
+-- >bob> hey
+-- *** Exception: user error (write not allowed)
 
 ----------------------------------------------------------------------
 -- Labeled values
@@ -353,78 +423,17 @@ unlabelP p (LabeledTCB l x) = do
 -- getLine' :: Label l => l -> LIO l (Labeled l String)
 
 ----------------------------------------------------------------------
--- lifting concurrency primitives into LIO
-
-forkLIO :: Label l => LIO l () -> LIO l ()
-forkLIO lioAct = do
-  l <- getLabel
-  void . liftIOTCB . forkIO $ void $ runLIO lioAct l
-
-
-data LMVar l a = LMVarTCB l (MVar a)
-
-newLMVarP :: Priv l p => p -> l -> a -> LIO l (LMVar l a)
-newLMVarP p l x = do
-  guardWriteP p l
-  mvar <- liftIOTCB $ newMVar x
-  return $ LMVarTCB l mvar
-
-newEmptyLMVarP :: Priv l p => p -> l -> LIO l (LMVar l a)
-newEmptyLMVarP p l = do
-  guardWriteP p l
-  mvar <- liftIOTCB $ newEmptyMVar
-  return $ LMVarTCB l mvar
-
-takeLMVarP :: Priv l p => p -> LMVar l a -> LIO l a
-takeLMVarP p (LMVarTCB l mvar) = do
-  raiseLabelP p l
-  guardWriteP p l
-  liftIOTCB $ takeMVar mvar
-
-putLMVarP :: Priv l p => p -> LMVar l a -> a -> LIO l ()
-putLMVarP p (LMVarTCB l mvar) x = do
-  raiseLabelP p l
-  guardWriteP p l
-  liftIOTCB $ putMVar mvar x
-
--- examples (like the one at the end of the lecture)
--- lifting MVars into LIO
--- more examples -- e.g., maybe a password checker
-
-simpleExample8 = runSimpleExample $ do
-  alice <- newEmptyLMVarP NoPriv TopSecret
-  bob <- newEmptyLMVarP NoPriv TopSecret
-  -- as alice:
-  forkLIO $ do putStrLn "<alice<"
-               secret <- getLine
-               putLMVarP NoPriv alice secret
-  -- as bob:
-  forkLIO $ do msg <- takeLMVarP (SimplePrivTCB TopSecret) alice
-               putStrLn $ ">bob> " ++ msg
-               putLMVarP NoPriv bob ""
-  -- as the messenger:
-  msg <- takeLMVarP NoPriv bob
-  putStrLn $ "Intercepted message: " ++ show msg
--- *Main> simpleExample8
--- <alice<
--- hey
--- >bob> hey
--- *** Exception: user error (write not allowed)
-
-----------------------------------------------------------------------
-----------------------------------------------------------------------
--- the “sets of principals" label model
+-- A “sets of principals" label model
 
 type Principal = String
 
--- SetLabel econdes a label model representing the set of principals
--- to whom data labeled as such is sensitive.
+-- SetLabel is a label model representing the set of principals to
+-- whom data labeled as such is sensitive.
 newtype SetLabel = SetLabel (Set Principal)
                    deriving (Eq, Ord, Show)
 
 fromList :: [Principal] -> SetLabel
 fromList = SetLabel . Set.fromList
-
 
 instance Label SetLabel where
   -- Information can from one entitty to another only if the data
@@ -466,23 +475,22 @@ instance PublicAction SetLabel where publicLabel = fromList []
 runSetExample :: (Show a) => LIO SetLabel a -> IO ()
 runSetExample = runExample
 
--- examples (maybe variants of the examples in earlier sections above)
-
--- Encoding the 3-point label model
-
-topSecret  = fromList [ "TopSecret" , "Classified" , "Public" ]
-classified = fromList [ "Classified" , "Public" ]
-public     = fromList [ "Public" ]
+-- Alice and Bob
 alice      = fromList [ "Alice" ]
 bob        = fromList [ "Bob" ]
 
+-- Encoding the Public/Classified/TopSecret label model
+topSecret  = fromList [ "TopSecret" , "Classified" , "Public" ]
+classified = fromList [ "Classified" , "Public" ]
+public     = fromList [ "Public" ]
+
 setExample0 = runSetExample $ return
-  [ canFlowTo public     topSecret
-  , canFlowTo classified classified 
-  , canFlowTo classified topSecret 
-  , canFlowTo topSecret  public
-  , canFlowTo classified public
-  , canFlowTo topSecret  classified ]
+  [ public     `canFlowTo` topSecret
+  , classified `canFlowTo` classified 
+  , classified `canFlowTo` topSecret 
+  , topSecret  `canFlowTo` public
+  , classified `canFlowTo` public
+  , topSecret  `canFlowTo` classified ]
 
 setExample1 = runSetExample $ return
   [ canFlowToP (SetPrivTCB topSecret ) topSecret  public
@@ -500,23 +508,22 @@ setExample2 = runSetExample $ do
 -- Hey!
 -- *** Exception: user error (insufficient privs)
 
-
-
 setExample8 = runSetExample $ do
   secretVar <- newEmptyLMVarP NoPriv alice
+  -- First thread:
   forkLIO $ do
     raiseLabel alice
     putLMVarP NoPriv secretVar "Please do not share"
-
+  -- Second thread:
   forkLIO $ do
     raiseLabel bob
     putStrLnP bobPriv "I'll wait for a message from Alice"
     secret <- takeLMVarP bobPriv secretVar
     putStrLnP bobPriv secret -- This will fail!
+
   where alice =  fromList ["alice"]
         bob   =  fromList ["bob"]
         bobPriv = SetPrivTCB bob
-
 
 
 ----------------------------------------------------------------------
