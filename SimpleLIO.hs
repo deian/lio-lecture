@@ -5,9 +5,11 @@
     GeneralizedNewtypeDeriving #-}
 
 import Prelude hiding (putStrLn, getLine)
-import Control.Monad (unless)
+import Control.Monad (unless, void)
 import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.Class (lift)
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar
 import Data.Monoid
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -124,11 +126,14 @@ runLIO lioAct l = runStateT (unLIOTCB lioAct) l
 -- With this, we can now give the definition for the runSimpleExample
 -- wrapper we used above:
 
-runSimpleExample :: Show a => LIO SimpleLabel a -> IO ()
-runSimpleExample act = do
-  (a, l) <- runLIO act Public
+runExample :: (Show a, PublicAction l) => LIO l a -> IO ()
+runExample act = do
+  (a, l) <- runLIO act publicLabel
   IO.putStrLn $ show a
   IO.putStrLn  $ "=> " ++ show l ++ " <="
+
+runSimpleExample :: (Show a) => LIO SimpleLabel a -> IO ()
+runSimpleExample = runExample
 
 -- In general, it is useful to figure out what the current label of
 -- the computation is; we're going to use this when we check where an
@@ -152,10 +157,13 @@ setLabelP priv l = do
 -- prmitting, we usually want to raise the current label to allow
 -- reading more sensitive data.
 
-raiseLabel :: Label l => l -> LIO l ()
-raiseLabel l = do 
+raiseLabelP :: Priv l p => p -> l -> LIO l ()
+raiseLabelP p l = do 
  lcur <- getLabel
- setLabelP NoPriv $ lcur `lub` l
+ setLabelP NoPriv $ lcur `lub` (downgradeP p l)
+
+raiseLabel :: Label l => l -> LIO l ()
+raiseLabel = raiseLabelP NoPriv
 
 -- We call 'raiseLabel l' before reading any data at level 'l', this
 -- ensures that the current label always protects whatever is in
@@ -163,10 +171,13 @@ raiseLabel l = do
 -- data that the data from the current context is not leaked. To this
 -- end we use guardWrite:
 
-guardWrite :: Label l => l -> LIO l ()
-guardWrite l = do 
+guardWriteP :: Priv l p => p -> l -> LIO l ()
+guardWriteP p l = do 
  lcur <- getLabel
- unless (lcur `canFlowTo` l) $ fail "write not allowed"
+ unless (canFlowToP p lcur l) $ fail "write not allowed"
+
+guardWrite :: Label l => l -> LIO l ()
+guardWrite = guardWriteP NoPriv
 
 -- We call 'guardWrite l' before we write to an object labeled 'l'.
 -- (In a real implementation, we would not raise an error that halts
@@ -195,14 +206,17 @@ class Label l => PublicAction l where
   -- existence of a puclid label.
   publicLabel :: l
 
+  putStrLnP :: Priv l p => p -> String -> LIO l ()
+  -- Default implementation
+  putStrLnP p s = do guardWriteP p publicLabel
+                     liftIOTCB $ IO.putStrLn s
 
   putStrLn :: String -> LIO l ()
   -- Default implementation
-  putStrLn s = do guardWrite publicLabel
-                  liftIOTCB $ IO.putStrLn s
+  putStrLn = putStrLnP NoPriv
 
   getLine :: LIO l String
-  getLine = do raiseLabel publicLabel
+  getLine = do raiseLabelP NoPriv publicLabel
                liftIOTCB $ IO.getLine
   
 instance PublicAction SimpleLabel where publicLabel = Public
@@ -253,6 +267,7 @@ newLIORef l x = do
   ref <- liftIOTCB $ newIORef x
   return $ LIORefTCB l ref
 
+readLIORef :: Label l => LIORef l a -> LIO l a
 readLIORef (LIORefTCB l ref) = do
   raiseLabel l
   liftIOTCB $ readIORef ref
@@ -263,41 +278,41 @@ writeLIORef (LIORefTCB l ref) x = do
   liftIOTCB $ writeIORef ref x
 
 simpleExample6 = runSimpleExample $ do
-  putin <- newLIORef TopSecret Nothing
-  -- as putin:
-  tsRef <- do putStrLn "<putin<"
-              secret <- getLine
-              writeLIORef putin $ Just secret
+  alice <- newLIORef TopSecret Nothing
+  -- as alice:
+  do putStrLn "<alice<"
+     secret <- getLine
+     writeLIORef alice $ Just secret
   -- as the messenger:
-  msg <- readLIORef putin
+  msg <- readLIORef alice
   putStrLn $ "Intercepted message: " ++ show msg
--- <putin<
+-- <alice<
 -- Wouldn't you like to know.
 -- *** Exception: user error (write not allowed)
 
 simpleExample7 = runSimpleExample $ do
-  putin <- newLIORef TopSecret Nothing
-  obama <- newLIORef TopSecret Nothing
-  -- as putin:
-  tsRef <- do putStrLn "<putin<"
-              secret <- getLine
-              writeLIORef putin $ Just secret
+  alice <- newLIORef TopSecret Nothing
+  bob <- newLIORef TopSecret Nothing
+  -- as alice:
+  do putStrLn "<alice<"
+     secret <- getLine
+     writeLIORef alice $ Just secret
   -- as the messenger:
-  msg <- readLIORef putin
-  writeLIORef obama $ msg
-  -- as obama:
-  do mmsg <- readLIORef putin
+  msg <- readLIORef alice
+  writeLIORef bob $ msg
+  -- as bob:
+  do mmsg <- readLIORef alice
      case mmsg of
        Just msg -> do lcur <- getLabel
                       setLabelP (SimplePrivTCB TopSecret) Public
-                      putStrLn $ ">obama> " ++ msg
+                      putStrLn $ ">bob> " ++ msg
                       raiseLabel lcur
        _ -> return ()
   -- as the messenger:
   putStrLn $ "Intercepted message: " ++ show msg
--- <putin<
+-- <alice<
 -- Woudln't you like to know.
--- >obama> Woudln't you like to know
+-- >bob> Woudln't you like to know
 -- *** Exception: user error (write not allowed)
 
 
@@ -339,10 +354,62 @@ unlabelP p (LabeledTCB l x) = do
 
 ----------------------------------------------------------------------
 -- lifting concurrency primitives into LIO
--- examples (like the one at the end of the lecture)
 
+forkLIO :: Label l => LIO l () -> LIO l ()
+forkLIO lioAct = do
+  l <- getLabel
+  void . liftIOTCB . forkIO $ void $ runLIO lioAct l
+
+
+data LMVar l a = LMVarTCB l (MVar a)
+
+newLMVarP :: Priv l p => p -> l -> a -> LIO l (LMVar l a)
+newLMVarP p l x = do
+  guardWriteP p l
+  mvar <- liftIOTCB $ newMVar x
+  return $ LMVarTCB l mvar
+
+newEmptyLMVarP :: Priv l p => p -> l -> LIO l (LMVar l a)
+newEmptyLMVarP p l = do
+  guardWriteP p l
+  mvar <- liftIOTCB $ newEmptyMVar
+  return $ LMVarTCB l mvar
+
+takeLMVarP :: Priv l p => p -> LMVar l a -> LIO l a
+takeLMVarP p (LMVarTCB l mvar) = do
+  raiseLabelP p l
+  guardWriteP p l
+  liftIOTCB $ takeMVar mvar
+
+putLMVarP :: Priv l p => p -> LMVar l a -> a -> LIO l ()
+putLMVarP p (LMVarTCB l mvar) x = do
+  raiseLabelP p l
+  guardWriteP p l
+  liftIOTCB $ putMVar mvar x
+
+-- examples (like the one at the end of the lecture)
 -- lifting MVars into LIO
 -- more examples -- e.g., maybe a password checker
+
+simpleExample8 = runSimpleExample $ do
+  alice <- newEmptyLMVarP NoPriv TopSecret
+  bob <- newEmptyLMVarP NoPriv TopSecret
+  -- as alice:
+  forkLIO $ do putStrLn "<alice<"
+               secret <- getLine
+               putLMVarP NoPriv alice secret
+  -- as bob:
+  forkLIO $ do msg <- takeLMVarP (SimplePrivTCB TopSecret) alice
+               putStrLn $ ">bob> " ++ msg
+               putLMVarP NoPriv bob ""
+  -- as the messenger:
+  msg <- takeLMVarP NoPriv bob
+  putStrLn $ "Intercepted message: " ++ show msg
+-- *Main> simpleExample8
+-- <alice<
+-- hey
+-- >bob> hey
+-- *** Exception: user error (write not allowed)
 
 ----------------------------------------------------------------------
 ----------------------------------------------------------------------
@@ -396,6 +463,9 @@ instance Priv SetLabel SetPriv where
 
 instance PublicAction SetLabel where publicLabel = fromList []
 
+runSetExample :: (Show a) => LIO SetLabel a -> IO ()
+runSetExample = runExample
+
 -- examples (maybe variants of the examples in earlier sections above)
 
 {- Encoding the 3-point label model
@@ -403,6 +473,25 @@ topSecret  = "TopSecret" /\ "Classified" /\ "Public"
 classified = "Classified" /\ "Public"
 public     = "Public"
 -}
+
+
+
+setExample8 = runSetExample $ do
+  secretVar <- newEmptyLMVarP NoPriv alice
+  forkLIO $ do
+    raiseLabel alice
+    putLMVarP NoPriv secretVar "Please do not share"
+
+  forkLIO $ do
+    raiseLabel bob
+    putStrLnP bobPriv "I'll wait for a message from Alice"
+    secret <- takeLMVarP bobPriv secretVar
+    putStrLnP bobPriv secret -- This will fail!
+  where alice =  fromList ["alice"]
+        bob   =  fromList ["bob"]
+        bobPriv = SetPrivTCB bob
+
+
 
 ----------------------------------------------------------------------
 -- Integrity (presented as a pure-integrity sets-of-principals model)
