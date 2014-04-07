@@ -231,29 +231,29 @@ simpleExample2 = runSimpleExample $ putStrLn "Hello LIO world!"
 -- => Public <=
 
 simpleExample3 = runSimpleExample $ do
-  putStrLn "Hello LIO world!"
-  raiseLabel TopSecret
-  putStrLn "Edward in the house..."
+  putStrLn "Hello LIO world!"                -- {Public}
+  raiseLabel TopSecret                       -- {TopSecret}  <- {Public}    with (⊑)
+  putStrLn "Edward in the house..."          -- Requires {Public}!
 -- Hello LIO world!
 -- *** Exception: user error (write not allowed)
 
 simpleExample4 = runSimpleExample $ do
-  putStrLn "Hello LIO world!"
-  raiseLabel TopSecret
-  setLabelP (SimplePrivTCB TopSecret) Public
-  putStrLn "Edward got privs..."
+  putStrLn "Hello LIO world!"                -- {Public}
+  raiseLabel TopSecret                       -- {TopSecret}  <- {Public}    with (⊑)
+  setLabelP (SimplePrivTCB TopSecret) Public -- {Public}     <- {TopSecret) with (TopSecret)
+  putStrLn "Edward got privs..."             -- {Public}
 -- Hello LIO world!
 -- Edward got privs...
 
 simpleExample5 = runSimpleExample $ do
   let privs = SimplePrivTCB Classified
-  putStrLn "Hello LIO world!"
-  raiseLabel Classified
-  setLabelP privs Public
-  putStrLn "Bradley has some privs too..."
-  raiseLabel TopSecret
-  setLabelP privs Public
-  putStrLn "But not as many as Edward..."
+  putStrLn "Hello LIO world!"                -- {Public}
+  raiseLabel Classified                      -- {Classified} <- {Public}     with (⊑)
+  setLabelP privs Public                     -- {Public}     <- {Classified} with {Classified}
+  putStrLn "Bradley has some privs too..."   -- {Public}
+  raiseLabel TopSecret                       -- {TopSecret}  <- {Public}     with (⊑)
+  setLabelP privs Public                     -- {Public}    !<- {TopSecret}  with {Classified}
+  putStrLn "But not as many as Edward..."    --
 -- Hello LIO world!
 -- Bradley has some privs too...
 -- *** Exception: user error (insufficient privs)
@@ -298,27 +298,27 @@ writeLIORef :: Label l => LIORef l a -> a -> LIO l ()
 writeLIORef = writeLIORefP NoPriv
 
 simpleExample6 = runSimpleExample $ do
-  aliceSecret <- newLIORef TopSecret ""
+  aliceSecret <- newLIORef TopSecret ""           -- {Public}     [guard {Public} ⊑ {TopSecret}]
   -- as alice:
-  do putStrLn "<alice<"
-     secret <- getLine
-     writeLIORef aliceSecret secret
+  do putStrLn "<alice<"                           -- {Public}
+     secret <- getLine                            -- {Public}
+     writeLIORef aliceSecret secret               -- {Public}     [guard {Public} ⊑ {TopSecret}]
   -- as the messenger:
-  msg <- readLIORef aliceSecret
-  putStrLn $ "Intercepted message: " ++ show msg
+  msg <- readLIORef aliceSecret                   -- {TopSecret}  <- {Public}    with (⊑)
+  putStrLn $ "Intercepted message: " ++ show msg  -- !
 -- <alice<
 -- Wouldn't you like to know.
 -- *** Exception: user error (write not allowed)
 
 simpleExample6a = runSimpleExample $ do
-  aliceSecret <- newLIORef TopSecret ""
+  aliceSecret <- newLIORef TopSecret ""             -- {Public}     [guard {Public} ⊑ {TopSecret}]
   -- as alice:
   putStrLn "<alice<"
   secret <- getLine
-  writeLIORef aliceSecret secret
+  writeLIORef aliceSecret secret                    -- {Public}     [guard {Public} ⊑ {TopSecret}]
   -- as the messenger:
   -- msg <- readLIORef aliceSecret
-  putStrLn $ "Intercepted message: " ++ show secret
+  putStrLn $ "Intercepted message: " ++ show secret -- {Public}
 
 -- (In the above example, the "as alice" and "as messenger" actions
 -- are actually all running in the same thread.  More realistically,
@@ -327,23 +327,23 @@ simpleExample6a = runSimpleExample $ do
 -- see how to express this in just a minute.)
 
 simpleExample7 = runSimpleExample $ do
-  aliceSecret <- newLIORef TopSecret ""
-  bobSecret <- newLIORef TopSecret ""
+  aliceSecret <- newLIORef TopSecret ""           -- {Public}     [guard {Public} ⊑ {TopSecret}]
+  bobSecret <- newLIORef TopSecret ""             -- {Public}     [guard {Public} ⊑ {TopSecret}]
   -- as alice:
   do putStrLn "<alice<"
      secret <- getLine
-     writeLIORef aliceSecret secret
+     writeLIORef aliceSecret secret               -- {Public}     [guard {Public} ⊑ {TopSecret}]
   -- as the messenger:
-  msg <- readLIORef aliceSecret
-  writeLIORef bobSecret $ msg
+  msg <- readLIORef aliceSecret                   -- {TopSecret}  <- {Public}    with (⊑)
+  writeLIORef bobSecret $ msg                     -- {TopSecret}  [guard {TopSecret} ⊑ {TopSecret}]
   -- as bob:
-  do msg <- readLIORef bobSecret
+  do msg <- readLIORef bobSecret                  -- {TopSecret}
      lcur <- getLabel
-     setLabelP (SimplePrivTCB TopSecret) Public
-     putStrLn $ ">bob> " ++ msg
-     raiseLabel lcur
+     setLabelP (SimplePrivTCB TopSecret) Public   -- {Public}     <- {TopSecret} with (TopSecret)
+     putStrLn $ ">bob> " ++ msg                   -- {Public}
+     raiseLabel lcur                              -- {TopSecret}  <- {Public}    with (⊑)
   -- as the messenger:
-  putStrLn $ "Intercepted message: " ++ show msg
+  putStrLn $ "Intercepted message: " ++ show msg  -- !
 -- <alice<
 -- Wouldn't you like to know
 -- >bob> Wouldn't you like to know
