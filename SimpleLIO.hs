@@ -575,11 +575,15 @@ secExample4 = runSecExample $ do
 
 data Labeled l t = LabeledTCB l t
 
--- `label` requires the value label to be above the current label
-label :: Label l => l -> a -> LIO l (Labeled l a)
-label l x = do
-  guardWrite l
+-- `label` requires the value label to be above the current label, up
+-- to privileges
+labelP :: Priv l p => p -> l -> a -> LIO l (Labeled l a)
+labelP priv l x = do
+  guardWriteP priv l
   return $ LabeledTCB l x
+
+label :: Label l => l -> a -> LIO l (Labeled l a)
+label = labelP NoPriv
 
 -- `unlabel` raises current label to (old current label `lub` value label)
 unlabel :: (Label l) => Labeled l a -> LIO l a
@@ -603,11 +607,15 @@ labelOf (LabeledTCB l x) = l
 
 type DB l = Map Principal (Labeled l String)
 
+
+updateDBP :: Priv l p => p -> LMVar l (DB l) -> Principal -> l -> String -> LIO l ()
+updateDBP priv db prin l s = do
+  v <- labelP priv l s
+  m <- takeLMVarP priv db
+  putLMVarP priv db $ Map.insert prin v m
+
 updateDB :: Label l => LMVar l (DB l) -> Principal -> l -> String -> LIO l ()
-updateDB db prin l s = do
-  m <- takeLMVarP NoPriv db
-  v <- label l s
-  putLMVarP NoPriv db $ Map.insert prin v m
+updateDB = updateDBP NoPriv
 
 queryDB :: Label l => LMVar l (DB l) -> Principal -> LIO l String
 queryDB db prin = do
@@ -1108,6 +1116,65 @@ dcSecExample9 = runDCExample $ do
     putStrLnP NoPriv $ "Eve: I'm about to read the secret... " 
     s <- queryDB db "alice"
     putStrLnP NoPriv $ "Eve: " ++ s      -- Fails
+
+dcSecExample9' = runDCExample $ do
+  db <- newLMVarP NoPriv publicLabel $ Map.empty
+  -- First alice thread:
+  forkLIO $ do
+    updateDB db "alice" (cAlice %% cTrue) "Alice's big secret"
+  -- Second alice thread:
+  forkLIO $ do
+    s <- queryDB db "alice"
+    putStrLnP cAlicePriv $ "Alice: " ++ s
+  -- First bob thread:
+  forkLIO $ do
+    updateDB db "bob" (cBob %% cTrue) "Bob's even bigger secret"
+    updateDB db "alice" (cAlice %% cTrue) "Launch at dawn"
+  -- Second bob thread:
+  forkLIO $ do
+    s <- queryDB db "bob"
+    putStrLnP cBobPriv $ "Bob: " ++ s
+  -- Eve thread:
+  forkLIO $ do
+    putStrLnP NoPriv $ "Eve: I'm about to read the secret... " 
+    s <- queryDB db "alice"
+    putStrLnP NoPriv $ "Eve: " ++ s      -- Fails
+  -- Third  alice thread:
+  forkLIO $ do
+    s <- queryDB db "alice"
+    putStrLnP cAlicePriv $ "Alice: " ++ s
+
+-- This shows that we have secrecy since Eve cannot leak the data, but
+-- no integrity: Bob corrupted Alice's DB cell.
+
+dcSecExample9'' = runDCExample $ do
+  db <- newLMVarP NoPriv publicLabel $ Map.empty
+  -- First alice thread:
+  forkLIO $ do
+    updateDBP cAlicePriv db "alice" (cAlice %% cAlice) "Alice's big secret"
+  -- Second alice thread:
+  forkLIO $ do
+    s <- queryDB db "alice"
+    putStrLnP cAlicePriv $ "Alice: " ++ s
+  -- First bob thread:
+  forkLIO $ do
+    updateDBP cBobPriv db "bob" (cBob %% cBob) "Bob's even bigger secret"
+    -- In a real app we won't be able to specify a new label:
+    updateDB db "alice" (cAlice %% cAlice) "Launch at dawn" -- Fails
+  -- Second bob thread:
+  forkLIO $ do
+    s <- queryDB db "bob"
+    putStrLnP cBobPriv $ "Bob: " ++ s
+  -- Eve thread:
+  forkLIO $ do
+    putStrLnP NoPriv $ "Eve: I'm about to read the secret... " 
+    s <- queryDB db "alice"
+    putStrLnP NoPriv $ "Eve: " ++ s      -- Fails
+  -- Third  alice thread:
+  forkLIO $ do
+    s <- queryDB db "alice"
+    putStrLnP cAlicePriv $ "Alice: " ++ s
+
 
 -- (but just gidcve examples with pure conjunction and pure disjunction)
 
