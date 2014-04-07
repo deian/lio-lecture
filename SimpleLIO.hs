@@ -268,21 +268,30 @@ simpleExample5 = runSimpleExample $ do
 
 data LIORef l a = LIORefTCB l (IORef a)
 
-newLIORef :: Label l => l -> a -> LIO l (LIORef l a)
-newLIORef l x = do
-  guardWrite l
+newLIORefP :: Priv l p => p -> l -> a -> LIO l (LIORef l a)
+newLIORefP p l x = do
+  guardWriteP p l
   ref <- liftIOTCB $ newIORef x
   return $ LIORefTCB l ref
 
-readLIORef :: Label l => LIORef l a -> LIO l a
-readLIORef (LIORefTCB l ref) = do
-  raiseLabel l
+newLIORef :: Label l => l -> a -> LIO l (LIORef l a)
+newLIORef = newLIORefP NoPriv
+
+readLIORefP :: Priv l p => p -> LIORef l a -> LIO l a
+readLIORefP p (LIORefTCB l ref) = do
+  raiseLabelP p l
   liftIOTCB $ readIORef ref
 
-writeLIORef :: Label l => LIORef l a -> a -> LIO l ()
-writeLIORef (LIORefTCB l ref) x = do
-  guardWrite l
+readLIORef :: Label l => LIORef l a -> LIO l a
+readLIORef = readLIORefP NoPriv
+
+writeLIORefP :: Priv l p => p -> LIORef l a -> a -> LIO l ()
+writeLIORefP p (LIORefTCB l ref) x = do
+  guardWriteP p l
   liftIOTCB $ writeIORef ref x
+
+writeLIORef :: Label l => LIORef l a -> a -> LIO l ()
+writeLIORef = writeLIORefP NoPriv
 
 simpleExample6 = runSimpleExample $ do
   aliceSecret <- newLIORef TopSecret ""
@@ -385,7 +394,6 @@ putLMVarP p (LMVarTCB l mvar) x = do
 
 putLMVar :: Label l => LMVar l a -> a -> LIO l ()
 putLMVar = putLMVarP NoPriv
-
 
 -- BCP: Does it work? DS: Yep, added comment where it fails
 simpleExample8 = runSimpleExample $ do
@@ -636,7 +644,8 @@ secExample9 = runSecExample $ do
 -- Integrity 
 
 -- TrustLabel is a label model representing the set of principals that
--- endorsed/wrote the data. Hence, an "integrity/Trust label".
+-- principals that have participated in creating this value.
+-- In DCLabels terminology this is a disjunction of principals.
 newtype TrustLabel = TrustLabel (Set Principal)
                      deriving (Eq, Ord, Show)
 
@@ -650,17 +659,22 @@ trustLabel = TrustLabel . Set.fromList
 -- principals that have participated in creating this value?"  The
 -- former is nice because it refers to an explicit downgrading step
 -- that must have happened at some point in the past (assuming that
--- the default label is high---i.e., low-integrity).  But you seem to
--- use the other consistently, so let's stick with that...
+-- the default label is high---i.e., low-integrity). 
+--
+-- DS: The latter is the correct one for this label model, since it's
+-- a disjunctive clause. The "highest" integrity value is one endorsed
+-- by a single principal (this model can't have multiple principals
+-- endorsing a value).
 
 instance Label TrustLabel where
   -- Information can flow from one entity to another only if the
   -- direction of flow is from more trustworthy to less
-  -- trustworthy---i.e., there are more principals that could have
-  -- created this data.
+  -- trustworthy---i.e., there are more principals that participated
+  -- in creating this data.
   --
   -- We treat the empty set as the set of all principals, i.e., data that
-  -- could have been created by anybody.
+  -- could have been created by anybody. This is the least trustworthy
+  -- label (AKA top since everything flows to it).
   (TrustLabel s1) `canFlowTo` (TrustLabel s2) =
      Set.null s2 || if Set.null s1
                       then False
@@ -671,7 +685,7 @@ instance Label TrustLabel where
   (TrustLabel s1) `lub` (TrustLabel s2) =
      if Set.null s1 || Set.null s2
        then trustLabel []
-       else TrustLabel $ s2 `Set.union` s2
+       else TrustLabel $ s1 `Set.union` s2
 
 -- | When the privilege corresponds to a single principal this means
 -- that we can "speak on behalf of" a principal, i.e., we can endorse
@@ -683,6 +697,25 @@ instance Label TrustLabel where
 data TrustPriv = TrustPrivTCB (Set Principal)
   deriving Show
 
+-- What does the trust lattice look like?
+--
+--                                [ ]                           (low integrity)
+--                                 
+--                                ...
+--                                 
+-- ...               [ benjamin, deian, leo, emilio, ...]     ...
+--
+--                                ...
+--
+--                     [ benjamin, deian, leo ]
+--                    /            |           \
+--                   /             |            \
+-- ... [benjamin, deian] ... [benjamin, leo] ... [deian, leo] ...
+--
+--                         ...           ...
+--
+--        [benjamin] ...   [deian] ...  [leo] ... [emilio] ...  (high integrity)
+
 -- The "downgrade" for trust labels simply means returning the element
 -- that is closest to the bottom of the lattice given the supplied
 -- privileges. Since the trust label does not have a well-defined glb
@@ -693,13 +726,19 @@ data TrustPriv = TrustPrivTCB (Set Principal)
 -- have this problem.)
 
 instance Priv TrustLabel TrustPriv where
-  downgradeP (TrustPrivTCB p) l@(TrustLabel s) = 
+  downgradeP (TrustPrivTCB p) l@(TrustLabel s) =
     if Set.null glb'
       then l
       else TrustLabel glb'
     where glb' = p `Set.intersection` s
+  -- The can-flow-to-given-privileges is more straight forward. It's
+  -- simply saying that information can flow from l1 to l2 if either
+  -- l2 is less trust worthy or the privileges can be used "endorse"
+  -- the data at level l1.
+  --
   canFlowToP (TrustPrivTCB p) l1 l2 = 
     l1 `canFlowTo` l2 || TrustLabel p `canFlowTo` l2
+  -- (Conceptually this is the same as l1 /\ p => l2.)
 
 instance PublicAction TrustLabel where publicLabel = trustLabel []
 
@@ -730,12 +769,17 @@ tClassifiedPriv = mintTrustPrivTCB tClassified
 tPublicPriv     = mintTrustPrivTCB tPublic
 
 trustExample0 = runTrustExample $ return
-  [ tPublic     `canFlowTo` tTopSecret
-  , tClassified `canFlowTo` tClassified 
-  , tClassified `canFlowTo` tTopSecret 
-  , tTopSecret  `canFlowTo` tPublic
-  , tClassified `canFlowTo` tPublic
-  , tTopSecret  `canFlowTo` tClassified ]
+  [ tPublic     `canFlowTo` tTopSecret    -- False
+  , tClassified `canFlowTo` tClassified   -- True
+  , tClassified `canFlowTo` tTopSecret    -- False
+  , tTopSecret  `canFlowTo` tPublic       -- True
+  , tClassified `canFlowTo` tPublic       -- True
+  , tTopSecret  `canFlowTo` tClassified ] -- True
+
+-- Remember we don't want low integrity data to corrupt high-integrity
+-- end points. So something endorsed by a principal with the public
+-- level should not affect an entity that has been endorsed by someone
+-- at top-secret level.
 
 trustExample1 = runTrustExample $ return
   [ canFlowToP (mintTrustPrivTCB tTopSecret ) tPublic tTopSecret 
@@ -743,46 +787,37 @@ trustExample1 = runTrustExample $ return
   , canFlowToP (mintTrustPrivTCB tClassified) tPublic tClassified 
   , canFlowToP (mintTrustPrivTCB tClassified) tPublic tTopSecret ]
 
-trustExample0' = runTrustExample $ return
-  [ tAlice       `canFlowTo` tAliceOrBob
-  , tBob         `canFlowTo` tAliceOrBob
-  , tAliceOrBob  `canFlowTo` tAlice
-  , tAliceOrBob  `canFlowTo` tBob
-  , tAlice       `canFlowTo` tBob
-  , tBob         `canFlowTo` tAlice 
-  , tCarlaOrDan  `canFlowTo` tAliceOrBob 
+trustExample2 = runTrustExample $ return
+  [ tAlice       `canFlowTo` tAliceOrBob    -- True
+  , tBob         `canFlowTo` tAliceOrBob    -- True
+  , tAliceOrBob  `canFlowTo` tAlice         -- False
+  , tAliceOrBob  `canFlowTo` tBob           -- False
+  , tAlice       `canFlowTo` tBob           -- False
+  , tBob         `canFlowTo` tAlice         -- False
+  , tCarlaOrDan  `canFlowTo` tAliceOrBob ]  -- False
+
+trustExample3 = runTrustExample $ return
+  [ canFlowToP tAlicePriv      tAliceOrBob tAlice      -- True
+  , canFlowToP tBobPriv        tAliceOrBob tBob        -- True
+  , canFlowToP tBobPriv        tAlice      tBob        -- True
+  , canFlowToP tAlicePriv      tBob        tAlice      -- True
+  , canFlowToP tAlicePriv      tCarlaOrDan tAliceOrBob -- True
+  , canFlowToP tAliceOrBobPriv tCarlaOrDan tAliceOrBob -- True
+  , canFlowToP tCarlaOrDanPriv tCarlaOrDan tAliceOrBob -- False 
   ]
 
-trustExample1' = runTrustExample $ return
-  [ canFlowToP tAlicePriv      tAliceOrBob tAlice
-  , canFlowToP tBobPriv        tAliceOrBob tBob
-  , canFlowToP tBobPriv        tAlice      tBob
-  , canFlowToP tAlicePriv      tBob        tAlice
-  , canFlowToP tAliceOrBobPriv tCarlaOrDan tAliceOrBob 
-  , canFlowToP tCarlaOrDanPriv tCarlaOrDan tAliceOrBob 
-  ]
+trustExample4 = runTrustExample $ do
+  ref <- newLIORef tAlice "w00t"
+  readLIORef ref
+-- *** Exception: user error (write from TrustLabel (fromList []) to
+-- TrustLabel (fromList ["Alice"]) not allowed with privilege NoPriv)
 
---
--- LIORef with privs (here since class is in session)
---
-
--- BCP: Should this just replace some material above?
-
-newLIORefP :: Priv l p => p -> l -> a -> LIO l (LIORef l a)
-newLIORefP p l x = do
-  guardWriteP p l
-  ref <- liftIOTCB $ newIORef x
-  return $ LIORefTCB l ref
-
-readLIORefP :: Priv l p => p -> LIORef l a -> LIO l a
-readLIORefP p (LIORefTCB l ref) = do
-  raiseLabelP p l
-  liftIOTCB $ readIORef ref
-
-writeLIORefP :: Priv l p => p -> LIORef l a -> a -> LIO l ()
-writeLIORefP p (LIORefTCB l ref) x = do
-  guardWriteP p l
-  liftIOTCB $ writeIORef ref x
+trustExample5 = runTrustExample $ do
+  aliceSecret <- newLIORefP tAlicePriv tAlice ""   -- []
+  bobSecret   <- newLIORefP tBobPriv tBob ""       -- []
+  setLabelP tBobPriv tBob                          -- [Bob]
+  writeLIORef bobSecret "hey w00t w00t"
+  readLIORef aliceSecret                           -- [Alice, Bob]
 
 trustExample6 = runTrustExample $ do
   aliceSecret <- newLIORefP tAlicePriv tAlice ""
@@ -793,7 +828,7 @@ trustExample6 = runTrustExample $ do
   -- as the messenger:
   msg <- readLIORef aliceSecret
   putStrLn $ "Intercepted message: " ++ show msg
-  writeLIORef aliceSecret $ msg ++ " is corrupt"
+  writeLIORef aliceSecret $ msg ++ " is corrupt"  -- Fails here!
 
 -- Above, the messanger is able to intercept the message, but when it
 -- tries to update the reference with a new message (as to corrupt the
@@ -813,7 +848,7 @@ trustExample7 = runTrustExample $ do
   -- as the messenger:
   msg <- readLIORef sharedSecret
   putStrLn $ "Intercepted message: " ++ show msg
-  writeLIORef sharedSecret $ msg ++ " is corrupt"
+  writeLIORef sharedSecret $ msg ++ " is corrupt" -- Fails here!
 
 ----------------------------------------------------------------------
 -- DC labels
