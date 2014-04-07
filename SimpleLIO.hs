@@ -611,8 +611,8 @@ type DB l = Map Principal (Labeled l String)
 
 updateDB :: Label l => LMVar l (DB l) -> Principal -> l -> String -> LIO l ()
 updateDB db prin l s = do
-  m <- takeLMVarP NoPriv db
   v <- label l s
+  m <- takeLMVarP NoPriv db
   putLMVarP NoPriv db $ Map.insert prin v m
 
 queryDB :: Label l => LMVar l (DB l) -> Principal -> LIO l String
