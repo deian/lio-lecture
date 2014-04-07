@@ -852,10 +852,266 @@ trustExample7 = runTrustExample $ do
 
 ----------------------------------------------------------------------
 -- DC labels
--- (but just give examples with pure conjunction and pure disjunction)
+
+-- SecLabel is not enough since we sometimes want to consider data that
+-- either Alice or Bob can declassify, i.e., they both have equal
+-- stake in the data. 
+--
+-- TrustLabel is not enough since we sometimes want to allow multiple
+-- principals to endorse a piece of data.
+--
+-- This is where the DCLabels model comes into play. It has 2
+-- components, a secrecy and an integrity component, each being a
+-- propositional formula (by convention in conjunctive normal form).
+-- (Conceptually SecLabel was a conjunction of principals, TrustLabel
+-- was a disjunction of principals.)
+
+newtype CNF = CNF (Set (Set Principal))
+              deriving (Eq, Ord, Show)
+
+-- When considering secrecy, cTrue means data is public.  When
+-- considering integrity, cTrue means data carries no integrity
+-- guarantees, i.e., it is not endorsed by anybody.
+cTrue :: CNF
+cTrue = CNF $ Set.empty
+
+-- When considering secrecy, cFalse, corresponds to the most secret
+-- data. In a system with a finite set of principals, this corresponds
+-- to the conjunction of all the principals, i.e., the data is
+-- sensitive to everybody.  For that reason, cFalse generally
+-- shouldn't appear in a data label.  However, it is convenient to
+-- include it as to allow a thread to arbitrarily raise its label.
+--
+-- When considering integrity, cFalse indicates the highest integrity
+-- data. In a system with a finite set of principals, this corresponds
+-- to the conjunction of all the principals, i.e., the data was
+-- endorsed by everybody.
+cFalse :: CNF
+cFalse = CNF $ Set.singleton $ Set.empty
+
+-- Secrecy: The first formula describes the authority required to make
+-- the data public.
+-- Integrity: The second formula describes the authority with which
+-- immutable data was endorsed, or the authority required to modify
+-- mutable data.
+data DCLabel = DCLabel CNF CNF
+               deriving (Eq, Ord, Show)
+
+-- Helper constructor:
+(%%) :: CNF -> CNF -> DCLabel
+(%%) = DCLabel
+infix 6 %%
+
+instance Label DCLabel where
+  lub (DCLabel s1 i1) (DCLabel s2 i2) = 
+    DCLabel (s1 `cAnd` s2) (i1 `cOr`  i2)
+  -- The join preserves the privacy of both labels: must satisfy both
+  -- s1 and s2 to read data. The new data is less trustworthy, it is
+  -- composed of information from either i1 or i2.
+
+  canFlowTo (DCLabel s1 i1) (DCLabel s2 i2) = 
+    s2 `cImplies` s1 && i1 `cImplies` i2
+  -- Information can flow from one entity to another if the
+  -- destination's security formula satisfies the source, i.e., it
+  -- preserves the secrecy of the data. Dually, the source must be at
+  -- least as trustworthy as the destination.
+
+-- But now we need to define the helper functions cAnd, cOr, and
+-- cImplies. First, let's define some helper functions.
+
+-- Function that checks if the predicate holds for any element in the
+-- set.
+setAny :: (a -> Bool) -> Set a -> Bool
+setAny prd = Set.foldr' (\a -> (prd a ||)) False
+
+-- Function that checks if the predicate holds for all elements in the
+-- set.
+setAll :: (a -> Bool) -> Set a -> Bool
+setAll prd = Set.foldr' (\a -> (prd a &&)) True
+
+-- Okay, now let's define cAnd:
+
+cAnd :: CNF -> CNF -> CNF
+cAnd c (CNF ds) = Set.foldr cInsert c ds
+
+-- cAnd simply  "inserts" every disjunctive clause from the second CNF
+-- (ds) with cInsert "into" c.
+
+cInsert :: Set Principal -> CNF -> CNF
+cInsert dnew c@(CNF ds)
+  | setAny (`Set.isSubsetOf` dnew) ds = c
+  | otherwise = CNF $ Set.insert dnew $ Set.filter (not . (dnew `Set.isSubsetOf`)) ds
+
+-- cInsert inserts a new disjunctive clause dnew into the CNF c if
+-- there is no clause that implies this clause (and thus adding it
+-- would be redundant). Indeed, when adding dnew to ds we also remove
+-- any disjunctive clause that is implied by this new clause.
+
+-- It is useful to create a CNF from a list of disjunction into a CNF:
+
+cFromList :: [Set Principal] -> CNF
+cFromList = Set.foldr cInsert cTrue . Set.fromList
+
+cFromLists :: [[Principal]] -> CNF
+cFromLists = cFromList . map Set.fromList
+
+-- To ensure that each formula is indeed CNF, we use cInsert to
+-- insert each disjunctive clause, one at a time.
+
+-- Now, let's define the disjunction of formulas:
+
+cOr :: CNF -> CNF -> CNF
+cOr (CNF ds1) (CNF ds2) =
+  cFromList $ [Set.union d1 d2 | d1 <- Set.toList ds1, d2 <- Set.toList ds2]
+
+-- For every disjunctive clause in the first and second CNFs take the
+-- disjunction. Then take the conjunction of all these intermediate
+-- clauses, removing any redundant clauses.
+
+-- Finally, let's define the implication function:
+
+cImplies :: CNF -> CNF -> Bool
+cImplies (CNF ds1) (CNF ds2) = setAll ds1Implies ds2
+  where ds1Implies d = setAny (`Set.isSubsetOf` d) ds1
+
+-- This function makes sure that for each disjunctions (ds2) in the
+-- second CNF, the first formula (ds1) implies the disjuction. That
+-- is, there is a disjuction in ds1 that implies the disjuction (d)
+-- from ds2.
+
+
+-- DCLabel privileges are expressed as a CNF of the principals whose
+-- authority is being exercised. The conjunctive nature means that the
+-- code can speak on behalf of multiple principals. The disjunctive
+-- part means that code can "own" a delegated privilege.
+data DCPriv = DCPrivTCB CNF
+  deriving Show
+
+instance Priv DCLabel DCPriv where
+  downgradeP (DCPrivTCB p@(CNF ps)) (DCLabel (CNF ds) i) = 
+    DCLabel s (i `cAnd` p)
+    where s = CNF $ Set.filter (not . pImplies) ds
+          pImplies d = setAny (`Set.isSubsetOf` d) ps
+  -- For secrecy we remove any clause that is implied by the
+  -- privilege; for the integrity we simply take th glb.
+  -- This returns the element in the lattice that is less secret and
+  -- of higher integrity. (Overall, closer to the bottom of the
+  -- lattice.)
+
+
+  canFlowToP (DCPrivTCB p) (DCLabel s1 i1) (DCLabel s2 i2) =
+    (s2 `cAnd` p) `cImplies` s1 && (i1 `cAnd` p) `cImplies` i2
+  -- Here the privilege is used to bypass the secrecy restrictions by
+  -- adding the principals to the destination label. Dually, the
+  -- privilege is used to endorse the source label.
+
+instance PublicAction DCLabel where publicLabel = cTrue %% cTrue
+
+runDCExample :: (Show a) => LIO DCLabel a -> IO ()
+runDCExample = runExample
+
+--
+--
+
+cAlice       = cFromLists [["Alice"]]
+cBob         = cFromLists [["Bob"]]
+cAliceAndBob = cFromLists [["Alice"],["Bob"]]
+cAliceOrBob  = cFromLists [["Alice","Bob"]]
+cCarlaOrDan  = cFromLists [["Carla","Dan"]]
+
+cAlicePriv       = DCPrivTCB cAlice       
+cBobPriv         = DCPrivTCB cBob         
+cAliceAndBobPriv = DCPrivTCB cAliceAndBob 
+cAliceOrBobPriv  = DCPrivTCB cAliceOrBob  
+cCarlaOrDanPriv  = DCPrivTCB cCarlaOrDan  
+
+-- First part, same as secExample0'
+dcSecExample0 = runDCExample $ return
+  [ (cAlice       %% cTrue) `canFlowTo` (cAliceAndBob %% cTrue) 
+  , (cBob         %% cTrue) `canFlowTo` (cAliceAndBob %% cTrue) 
+  , (cAliceAndBob %% cTrue) `canFlowTo` (cAlice       %% cTrue) 
+  , (cAliceAndBob %% cTrue) `canFlowTo` (cBob         %% cTrue) 
+  , (cAlice       %% cTrue) `canFlowTo` (cBob         %% cTrue) 
+  , (cBob         %% cTrue) `canFlowTo` (cAlice       %% cTrue) 
+  --
+  , (cAliceOrBob  %% cTrue) `canFlowTo` (cAlice       %% cTrue) 
+  , (cAliceOrBob  %% cTrue) `canFlowTo` (cAliceAndBob %% cTrue) 
+  , (cAliceOrBob  %% cTrue) `canFlowTo` (cTrue        %% cTrue) 
+  ]
+  
+
+-- First part, same as secExample1'
+dcSecExample1 = runDCExample $ return
+  [ canFlowToP cBobPriv   (cAliceAndBob %% cTrue) ( cAlice %% cTrue)
+  , canFlowToP cAlicePriv (cAliceAndBob %% cTrue) ( cBob   %% cTrue)
+  , canFlowToP cAlicePriv (cAlice       %% cTrue) ( cBob   %% cTrue)
+  , canFlowToP cBobPriv   (cBob         %% cTrue) ( cAlice %% cTrue)
+  --
+  , canFlowToP cAlicePriv (cAliceOrBob %% cTrue)  (cTrue   %% cTrue) 
+  , canFlowToP cBobPriv   (cAliceOrBob %% cTrue)  (cTrue   %% cTrue) 
+  ]
+
+-- Same as trustExample2
+dcTrustExample0 = runDCExample $ return
+  [ (cTrue %% cAlice     ) `canFlowTo` (cTrue %% cAliceOrBob  )   -- True
+  , (cTrue %% cBob       ) `canFlowTo` (cTrue %% cAliceOrBob  )   -- True
+  , (cTrue %% cAliceOrBob) `canFlowTo` (cTrue %% cAlice       )   -- False
+  , (cTrue %% cAliceOrBob) `canFlowTo` (cTrue %% cBob         )   -- False
+  , (cTrue %% cAlice     ) `canFlowTo` (cTrue %% cBob         )   -- False
+  , (cTrue %% cBob       ) `canFlowTo` (cTrue %% cAlice       )   -- False
+  , (cTrue %% cCarlaOrDan) `canFlowTo` (cTrue %% cAliceOrBob  )   -- False
+  --                                                          
+  , (cTrue %% cAliceAndBob) `canFlowTo` (cTrue %% cAlice      )   -- True
+  , (cTrue %% cAliceAndBob) `canFlowTo` (cTrue %% cBob        )   -- True
+  , (cTrue %% cAlice)       `canFlowTo` (cTrue %% cAliceAndBob)   -- False
+  , (cTrue %% cBob  )       `canFlowTo` (cTrue %% cAliceAndBob)   -- False
+  ]
+
+-- First part, same as trustExample3 
+dcTrustExample1 = runDCExample $ return
+  [ canFlowToP cAlicePriv      (cTrue %% cAliceOrBob) (cTrue %% cAlice      ) -- True
+  , canFlowToP cBobPriv        (cTrue %% cAliceOrBob) (cTrue %% cBob        ) -- True
+  , canFlowToP cBobPriv        (cTrue %% cAlice     ) (cTrue %% cBob        ) -- True
+  , canFlowToP cAlicePriv      (cTrue %% cBob       ) (cTrue %% cAlice      ) -- True
+  , canFlowToP cAlicePriv      (cTrue %% cCarlaOrDan) (cTrue %% cAliceOrBob ) -- True
+  , canFlowToP cAliceOrBobPriv (cTrue %% cCarlaOrDan) (cTrue %% cAliceOrBob ) -- True
+  , canFlowToP cCarlaOrDanPriv (cTrue %% cCarlaOrDan) (cTrue %% cAliceOrBob ) -- False 
+  --                                                                        
+  , canFlowToP cAlicePriv       (cTrue %% cTrue     ) (cTrue %% cAlice      )  -- True
+  , canFlowToP cBobPriv         (cTrue %% cTrue     ) (cTrue %% cBob        )  -- True
+  , canFlowToP cAlicePriv       (cTrue %% cTrue     ) (cTrue %% cAliceOrBob )  -- True
+  , canFlowToP cBobPriv         (cTrue %% cTrue     ) (cTrue %% cAliceOrBob )  -- True
+  , canFlowToP cAliceAndBobPriv (cTrue %% cTrue     ) (cTrue %% cAliceAndBob)  -- True
+  , canFlowToP cBobPriv         (cTrue %% cAlice    ) (cTrue %% cAliceAndBob)  -- True
+  , canFlowToP cAlicePriv       (cTrue %% cBob      ) (cTrue %% cAliceAndBob)  -- True
+  ]
+
+-- Same as secExample9
+dcSecExample9 = runDCExample $ do
+  db <- newLMVarP NoPriv publicLabel $ Map.empty
+  -- First alice thread:
+  forkLIO $ do
+    updateDB db "alice" (cAlice %% cTrue) "Alice's big secret"
+  -- Second alice thread:
+  forkLIO $ do
+    s <- queryDB db "alice"
+    putStrLnP cAlicePriv $ "Alice: " ++ s
+  -- First bob thread:
+  forkLIO $ do
+    updateDB db "bob" (cBob %% cTrue) "Bob's even bigger secret"
+  -- Second bob thread:
+  forkLIO $ do
+    s <- queryDB db "bob"
+    putStrLnP cBobPriv $ "Bob: " ++ s
+  -- Eve thread:
+  forkLIO $ do
+    putStrLnP NoPriv $ "Eve: I'm about to read the secret... " 
+    s <- queryDB db "alice"
+    putStrLnP NoPriv $ "Eve: " ++ s      -- Fails
+
+-- (but just gidcve examples with pure conjunction and pure disjunction)
 
 -- A new version of the DB example with both secrecy and integrity?
-
 
 ----------------------------------------------------------------------
 
