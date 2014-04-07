@@ -633,25 +633,33 @@ secExample9 = runSecExample $ do
     putStrLnP NoPriv $ "Eve: " ++ s      -- Fails
 
 ----------------------------------------------------------------------
--- Integrity (presented as a pure-integrity sets-of-principals model)
-
+-- Integrity 
 
 -- TrustLabel is a label model representing the set of principals that
 -- endorsed/wrote the data. Hence, an "integrity/Trust label".
 newtype TrustLabel = TrustLabel (Set Principal)
                      deriving (Eq, Ord, Show)
 
-
--- Create a label from a list of principals
+-- Create a trust label from a list of principals
 trustLabel :: [Principal] -> TrustLabel
 trustLabel = TrustLabel . Set.fromList
 
+-- BCP: It's easy to get confused with integrity.  Is the right
+-- intuition for DC labels "These are the principals that have
+-- endorsed this value"?  Or is it better to say "The set of
+-- principals that have participated in creating this value?"  The
+-- former is nice because it refers to an explicit downgrading step
+-- that must have happened at some point in the past (assuming that
+-- the default label is high---i.e., low-integrity).  But you seem to
+-- use the other consistently, so let's stick with that...
+
 instance Label TrustLabel where
-  -- Information can from one entitty to another only if the data
-  -- becomes less trustworthy, i.e., there are more principals 
-  -- that could have created this data.
+  -- Information can flow from one entity to another only if the
+  -- direction of flow is from more trustworthy to less
+  -- trustworthy---i.e., there are more principals that could have
+  -- created this data.
   --
-  -- We threat the empty set as the set of all principals, i.e., data that
+  -- We treat the empty set as the set of all principals, i.e., data that
   -- could have been created by anybody.
   (TrustLabel s1) `canFlowTo` (TrustLabel s2) =
      Set.null s2 || if Set.null s1
@@ -757,6 +765,8 @@ trustExample1' = runTrustExample $ return
 --
 -- LIORef with privs (here since class is in session)
 --
+
+-- BCP: Should this just replace some material above?
 
 newLIORefP :: Priv l p => p -> l -> a -> LIO l (LIORef l a)
 newLIORefP p l x = do
