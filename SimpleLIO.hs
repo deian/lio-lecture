@@ -786,14 +786,14 @@ trustExample6 = runTrustExample $ do
 --                                                  (highest secrecy label)
 --
 -- Integrity:
---   {} %% {{}}          (i.e. True %% False)       Endorsed by nobody
+--   {} %% {}            (i.e. True %% True)        Endorsed by nobody
 --                                                  (highest integrity label = least trusted)
 --   {} %% {{Alice}}     (i.e. True %% Alice)       Endorsed by Alice
 --   {} %% {{Alice},{Bob}}                          Endorsed by both Alice *and* Bob 
 --                                                  (both privileges required to endorse)
 --   {} %% {{Alice,Bob}}                            Endorsed by one of Alice *or* Bob
 --                                                  (either privilege can endorse)
---   {} %% {}            (i.e. True %% True)        Endorsed by everybody 
+--   {} %% {{}}          (i.e. True %% False)       Endorsed by everybody 
 --                                                  (lowest integrity label = most trusted)
 
 newtype CNF = CNF (Set (Set Principal))
