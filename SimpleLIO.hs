@@ -268,6 +268,9 @@ simpleExample5 = runSimpleExample $ do
 
 data LIORef l a = LIORefTCB l (IORef a)
 
+-- BCP: It appears that creating an LIORef labeled below the current
+-- label is not allowed.  I don't understand why...
+
 newLIORefP :: Priv l p => p -> l -> a -> LIO l (LIORef l a)
 newLIORefP p l x = do
   guardWriteP p l
@@ -277,6 +280,7 @@ newLIORefP p l x = do
 newLIORef :: Label l => l -> a -> LIO l (LIORef l a)
 newLIORef = newLIORefP NoPriv
 
+-- WHy not legal if current label is strictly above l ?
 readLIORefP :: Priv l p => p -> LIORef l a -> LIO l a
 readLIORefP p (LIORefTCB l ref) = do
   raiseLabelP p l
@@ -395,7 +399,6 @@ putLMVarP p (LMVarTCB l mvar) x = do
 putLMVar :: Label l => LMVar l a -> a -> LIO l ()
 putLMVar = putLMVarP NoPriv
 
--- BCP: Does it work? DS: Yep, added comment where it fails
 simpleExample8 = runSimpleExample $ do
   aliceSecret <- newEmptyLMVar TopSecret
   bobSecret   <- newEmptyLMVar TopSecret
@@ -423,7 +426,7 @@ simpleExample8 = runSimpleExample $ do
 
 
 ----------------------------------------------------------------------
--- the "readers" Label Model
+-- The "Readers" Label Model
 
 type Principal = String
 
@@ -497,7 +500,6 @@ secExample0 = runSecExample $ return
   , classified `canFlowTo` public
   , topSecret  `canFlowTo` classified ]
 
--- fix
 secExample1 = runSecExample $ return
   [ canFlowToP (mintSecPrivTCB topSecret ) topSecret  public
   , canFlowToP (mintSecPrivTCB topSecret ) classified public
@@ -523,7 +525,7 @@ secExample2 = runSecExample $ do
   putStrLn "Hello public world!"
   raiseLabel alice
   putStrLnP alicePriv "hey!"
-  raiseLabel $ bob
+  raiseLabel bob
   putStrLnP alicePriv "hey again!"   -- fails
 -- Hello public world!
 -- Hey!
@@ -533,12 +535,12 @@ secExample3 = runSecExample $ do
   putStrLn "Hello public world!"
   raiseLabel alice
   putStrLnP alicePriv "hey!"
-  raiseLabel $ alice `lub` bob
+  raiseLabel $ bob
   putStrLnP allPrivs "hey again!"
+  where allPrivs  = mintSecPrivTCB $ alice `lub` bob
 -- Hello public world!
 -- Hey!
--- *** Exception: user error (insufficient privs)
-  where allPrivs  = mintSecPrivTCB $ alice `lub` bob
+-- Hey again!
 
 secExample4 = runSecExample $ do
   secretVar <- newEmptyLMVar alice
@@ -550,8 +552,8 @@ secExample4 = runSecExample $ do
   forkLIO $ do
     raiseLabel bob
     putStrLnP bobPriv "I'll wait for a message from Alice"
-    secret <- takeLMVarP bobPriv secretVar  -- BCP: This succeeds, yes? DS: Yes
-    putStrLnP bobPriv secret -- This will fail!
+    secret <- takeLMVarP bobPriv secretVar  -- This fails
+    putStrLnP bobPriv secret             
 
 
 ----------------------------------------------------------------------
@@ -575,8 +577,8 @@ secExample4 = runSecExample $ do
 
 data Labeled l t = LabeledTCB l t
 
--- `label` requires the value label to be above the current label, up
--- to privileges
+-- `labelP` requires the given value label to be above the current
+-- label (up to privileges)
 labelP :: Priv l p => p -> l -> a -> LIO l (Labeled l a)
 labelP priv l x = do
   guardWriteP priv l
@@ -607,15 +609,11 @@ labelOf (LabeledTCB l x) = l
 
 type DB l = Map Principal (Labeled l String)
 
-
-updateDBP :: Priv l p => p -> LMVar l (DB l) -> Principal -> l -> String -> LIO l ()
-updateDBP priv db prin l s = do
-  v <- labelP priv l s
-  m <- takeLMVarP priv db
-  putLMVarP priv db $ Map.insert prin v m
-
 updateDB :: Label l => LMVar l (DB l) -> Principal -> l -> String -> LIO l ()
-updateDB = updateDBP NoPriv
+updateDB db prin l s = do
+  m <- takeLMVarP NoPriv db
+  v <- label l s
+  putLMVarP NoPriv db $ Map.insert prin v m
 
 queryDB :: Label l => LMVar l (DB l) -> Principal -> LIO l String
 queryDB db prin = do
@@ -644,16 +642,17 @@ secExample9 = runSecExample $ do
     putStrLnP bobPriv $ "Bob: " ++ s
   -- Eve thread:
   forkLIO $ do
-    putStrLnP NoPriv $ "Eve: I'm about to read the secret... " 
+    putStrLn "Eve: I'm about to read the secret... " 
     s <- queryDB db "alice"
-    putStrLnP NoPriv $ "Eve: " ++ s      -- Fails
+    putStrLn $ "Eve: " ++ s      -- Fails
 
 ----------------------------------------------------------------------
 -- Integrity 
 
 -- TrustLabel is a label model representing the set of principals that
--- principals that have participated in creating this value.
--- In DCLabels terminology this is a disjunction of principals.
+-- that have "endorsed" a given process or memory cell -- i.e., the
+-- set of principals that have asserted that this data source is
+-- trustworthy.
 newtype TrustLabel = TrustLabel (Set Principal)
                      deriving (Eq, Ord, Show)
 
@@ -661,93 +660,28 @@ newtype TrustLabel = TrustLabel (Set Principal)
 trustLabel :: [Principal] -> TrustLabel
 trustLabel = TrustLabel . Set.fromList
 
--- BCP: It's easy to get confused with integrity.  Is the right
--- intuition for DC labels "These are the principals that have
--- endorsed this value"?  Or is it better to say "The set of
--- principals that have participated in creating this value?"  The
--- former is nice because it refers to an explicit downgrading step
--- that must have happened at some point in the past (assuming that
--- the default label is high---i.e., low-integrity). 
---
--- DS: The latter is the correct one for this label model, since it's
--- a disjunctive clause. The "highest" integrity value is one endorsed
--- by a single principal (this model can't have multiple principals
--- endorsing a value).
-
 instance Label TrustLabel where
-  -- Information can flow from one entity to another only if the
-  -- direction of flow is from more trustworthy to less
-  -- trustworthy---i.e., there are more principals that participated
-  -- in creating this data.
-  --
-  -- We treat the empty set as the set of all principals, i.e., data that
-  -- could have been created by anybody. This is the least trustworthy
-  -- label (AKA top since everything flows to it).
+  -- Information can flow from one place to another only if the
+  -- direction of flow is from more trustworthy to less trustworthy
+  -- (i.e., fewer principals are listed as having endorsed the data in
+  -- the target place than in the source).
   (TrustLabel s1) `canFlowTo` (TrustLabel s2) =
-     Set.null s2 || if Set.null s1
-                      then False
-                      else s1 `Set.isSubsetOf` s2
+       s2 `Set.isSubsetOf` s1
 
-  -- Combining data from two entities means that the new data is less
-  -- trustworthy and thus could contain information from either entity.
-  (TrustLabel s1) `lub` (TrustLabel s2) =
-     if Set.null s1 || Set.null s2
-       then trustLabel []
-       else TrustLabel $ s1 `Set.union` s2
+  -- Combining data from two entities makes the new data less
+  -- trustworthy, so the only principals who should endorse the new
+  -- data are ones that endorsed *both* of the places it came from.
+  (TrustLabel s1) `lub` (TrustLabel s2) = 
+    TrustLabel $ s1 `Set.intersection` s2
 
--- | When the privilege corresponds to a single principal this means
--- that we can "speak on behalf of" a principal, i.e., we can endorse
--- the data of this principal.
---
--- However, when the privilege is a set of principals, this is a
--- "delegated" privilege and we can only endorse data at this level.
--- That is, the privilege is strictly less powerful than a singleton.
 data TrustPriv = TrustPrivTCB (Set Principal)
   deriving Show
 
--- What does the trust lattice look like?
---
---                                [ ]                           (low integrity)
---                                 
---                                ...
---                                 
--- ...               [ benjamin, deian, leo, emilio, ...]     ...
---
---                                ...
---
---                     [ benjamin, deian, leo ]
---                    /            |           \
---                   /             |            \
--- ... [benjamin, deian] ... [benjamin, leo] ... [deian, leo] ...
---
---                         ...           ...
---
---        [benjamin] ...   [deian] ...  [leo] ... [emilio] ...  (high integrity)
-
--- The "downgrade" for trust labels simply means returning the element
--- that is closest to the bottom of the lattice given the supplied
--- privileges. Since the trust label does not have a well-defined glb
--- (greatest lower bound), this definition also only makes sense in
--- certain cases. 
---
--- (DCLabels' trust/integrity components are CNF and thus does not
--- have this problem.)
-
 instance Priv TrustLabel TrustPriv where
   downgradeP (TrustPrivTCB p) l@(TrustLabel s) =
-    if Set.null glb'
-      then l
-      else TrustLabel glb'
-    where glb' = p `Set.intersection` s
-  -- The can-flow-to-given-privileges is more straight forward. It's
-  -- simply saying that information can flow from l1 to l2 if either
-  -- l2 is less trust worthy or the privileges can be used "endorse"
-  -- the data at level l1.
-  --
-  canFlowToP (TrustPrivTCB p) l1 l2 = 
-    l1 `canFlowTo` l2 || TrustLabel p `canFlowTo` l2
-  -- (Conceptually this is the same as l1 /\ p => l2.)
+    TrustLabel $ p `Set.union` s
 
+-- Note that the "public" label in this label model is the *highest* one
 instance PublicAction TrustLabel where publicLabel = trustLabel []
 
 runTrustExample :: (Show a) => LIO TrustLabel a -> IO ()
@@ -759,59 +693,31 @@ mintTrustPrivTCB (TrustLabel ps) = TrustPrivTCB ps
 -- Alice and Bob
 tAlice      = trustLabel [ "Alice" ]
 tBob        = trustLabel [ "Bob" ]
-tAliceOrBob = trustLabel [ "Alice", "Bob" ]
-tCarlaOrDan = trustLabel [ "Carla", "Dan" ]
+tAliceAndBob = trustLabel [ "Alice", "Bob" ]
+tCarlaAndDan = trustLabel [ "Carla", "Dan" ]
 
 tAlicePriv      = mintTrustPrivTCB tAlice
 tBobPriv        = mintTrustPrivTCB tBob
-tAliceOrBobPriv = mintTrustPrivTCB tAliceOrBob
-tCarlaOrDanPriv = mintTrustPrivTCB tCarlaOrDan
-
--- Encoding the Public/Classified/TopSecret label model
-tTopSecret  = trustLabel [ "TopSecret" ]
-tClassified = trustLabel [ "TopSecret", "Classified" ]
-tPublic     = trustLabel [ ] -- Alt: ["TopSecret", "Classified", "Public" ]
-
-tTopSecretPriv  = mintTrustPrivTCB tTopSecret
-tClassifiedPriv = mintTrustPrivTCB tClassified
-tPublicPriv     = mintTrustPrivTCB tPublic
-
-trustExample0 = runTrustExample $ return
-  [ tPublic     `canFlowTo` tTopSecret    -- False
-  , tClassified `canFlowTo` tClassified   -- True
-  , tClassified `canFlowTo` tTopSecret    -- False
-  , tTopSecret  `canFlowTo` tPublic       -- True
-  , tClassified `canFlowTo` tPublic       -- True
-  , tTopSecret  `canFlowTo` tClassified ] -- True
-
--- Remember we don't want low integrity data to corrupt high-integrity
--- end points. So something endorsed by a principal with the public
--- level should not affect an entity that has been endorsed by someone
--- at top-secret level.
-
-trustExample1 = runTrustExample $ return
-  [ canFlowToP (mintTrustPrivTCB tTopSecret ) tPublic tTopSecret 
-  , canFlowToP (mintTrustPrivTCB tTopSecret ) tPublic tClassified
-  , canFlowToP (mintTrustPrivTCB tClassified) tPublic tClassified 
-  , canFlowToP (mintTrustPrivTCB tClassified) tPublic tTopSecret ]
+tAliceAndBobPriv = mintTrustPrivTCB tAliceAndBob
+tCarlaAndDanPriv = mintTrustPrivTCB tCarlaAndDan
 
 trustExample2 = runTrustExample $ return
-  [ tAlice       `canFlowTo` tAliceOrBob    -- True
-  , tBob         `canFlowTo` tAliceOrBob    -- True
-  , tAliceOrBob  `canFlowTo` tAlice         -- False
-  , tAliceOrBob  `canFlowTo` tBob           -- False
+  [ tAlice       `canFlowTo` tAliceAndBob   -- False
+  , tBob         `canFlowTo` tAliceAndBob   -- False
+  , tAliceAndBob `canFlowTo` tAlice         -- True
+  , tAliceAndBob `canFlowTo` tBob           -- True
   , tAlice       `canFlowTo` tBob           -- False
   , tBob         `canFlowTo` tAlice         -- False
-  , tCarlaOrDan  `canFlowTo` tAliceOrBob ]  -- False
+  , tCarlaAndDan `canFlowTo` tAliceAndBob ] -- False
 
 trustExample3 = runTrustExample $ return
-  [ canFlowToP tAlicePriv      tAliceOrBob tAlice      -- True
-  , canFlowToP tBobPriv        tAliceOrBob tBob        -- True
-  , canFlowToP tBobPriv        tAlice      tBob        -- True
-  , canFlowToP tAlicePriv      tBob        tAlice      -- True
-  , canFlowToP tAlicePriv      tCarlaOrDan tAliceOrBob -- True
-  , canFlowToP tAliceOrBobPriv tCarlaOrDan tAliceOrBob -- True
-  , canFlowToP tCarlaOrDanPriv tCarlaOrDan tAliceOrBob -- False 
+  [ canFlowToP tAlicePriv      tAliceAndBob tAlice        -- True
+  , canFlowToP tBobPriv        tAliceAndBob tBob          -- True
+  , canFlowToP tBobPriv        tAlice      tBob           -- True
+  , canFlowToP tAlicePriv      tBob        tAlice         -- True
+  , canFlowToP tAlicePriv      tCarlaAndDan tAliceAndBob  -- False
+  , canFlowToP tAliceAndBobPriv tCarlaAndDan tAliceAndBob -- True
+  , canFlowToP tCarlaAndDanPriv tCarlaAndDan tAliceAndBob -- False 
   ]
 
 trustExample4 = runTrustExample $ do
@@ -820,12 +726,13 @@ trustExample4 = runTrustExample $ do
 -- *** Exception: user error (write from TrustLabel (fromList []) to
 -- TrustLabel (fromList ["Alice"]) not allowed with privilege NoPriv)
 
+-- "secret" is confusing
 trustExample5 = runTrustExample $ do
   aliceSecret <- newLIORefP tAlicePriv tAlice ""   -- []
   bobSecret   <- newLIORefP tBobPriv tBob ""       -- []
   setLabelP tBobPriv tBob                          -- [Bob]
   writeLIORef bobSecret "hey w00t w00t"
-  readLIORef aliceSecret                           -- [Alice, Bob]
+  readLIORef aliceSecret                           -- []
 
 trustExample6 = runTrustExample $ do
   aliceSecret <- newLIORefP tAlicePriv tAlice ""
@@ -836,27 +743,12 @@ trustExample6 = runTrustExample $ do
   -- as the messenger:
   msg <- readLIORef aliceSecret
   putStrLn $ "Intercepted message: " ++ show msg
-  writeLIORef aliceSecret $ msg ++ " is corrupt"  -- Fails here!
+  writeLIORef aliceSecret $ msg ++ " p0wned!"  -- Fails here!
 
 -- Above, the messanger is able to intercept the message, but when it
--- tries to update the reference with a new message (as to corrupt the
--- ref content), an exception is raised.
+-- tries to update the reference with a new message (thus corrupting the
+-- ref's content), an exception is raised.
 
-trustExample7 = runTrustExample $ do
-  sharedSecret <- newLIORefP tAlicePriv tAliceOrBob ""
-  -- as alice:
-  do putStrLn "<alice<"
-     secret <- getLine
-     writeLIORefP tAlicePriv sharedSecret secret
-  -- as bbob
-  do putStrLn "<bob<"
-     secret <- getLine
-     existing <- readLIORef sharedSecret
-     writeLIORefP tBobPriv sharedSecret $ show [existing, secret]
-  -- as the messenger:
-  msg <- readLIORef sharedSecret
-  putStrLn $ "Intercepted message: " ++ show msg
-  writeLIORef sharedSecret $ msg ++ " is corrupt" -- Fails here!
 
 ----------------------------------------------------------------------
 -- DC labels
@@ -865,14 +757,44 @@ trustExample7 = runTrustExample $ do
 -- either Alice or Bob can declassify, i.e., they both have equal
 -- stake in the data. 
 --
--- TrustLabel is not enough since we sometimes want to allow multiple
--- principals to endorse a piece of data.
+-- TrustLabel is not enough since we sometimes want to consider data
+-- that has been endorsed by *either* Alice or Bob.  (E.g., Alice and
+-- Bob might share a ref cell that they can both write encorsed data
+-- to.  Everything that gets written will be endorsed by one or the
+-- other of them, but at any given moment we're not sure which one of
+-- them endorsed the current contents.)
 --
--- This is where the DCLabels model comes into play. It has 2
+-- This is where the DCLabels model comes into play. It has two
 -- components, a secrecy and an integrity component, each being a
--- propositional formula (by convention in conjunctive normal form).
--- (Conceptually SecLabel was a conjunction of principals, TrustLabel
--- was a disjunction of principals.)
+-- propositional formula (by convention, in conjunctive normal form --
+-- that is, a conjunction of disjunctions of principals):
+--
+--       secrecy-part %% integrity-part
+--
+-- Conceptually both SecLabel and TrustLabel were conjunctions of
+-- principals.  The additional flexibility to write disjunctions gives
+-- us some useful expressive power.  For example...
+--
+-- Secrecy:
+--   {} %% {}            (i.e. True %% True)        Secret for nobody (i.e. public)
+--   {{Alice}} %% {}     (i.e. Alice %% True)       Secret for Alice
+--   {{Alice},{Bob}} %% {}                          Secret for both Alice *and* Bob 
+--                                                  (both privileges required to declassify)
+--   {{Alice,Bob}} %% {}                            Secret for either Alice *or* Bob
+--                                                  (either privilege can declassify)
+--   {{}} %% {}          (i.e. False %% True)       Secret for *everybody* 
+--                                                  (highest secrecy label)
+--
+-- Integrity:
+--   {} %% {{}}          (i.e. True %% False)       Endorsed by nobody
+--                                                  (highest integrity label = least trusted)
+--   {} %% {{Alice}}     (i.e. True %% Alice)       Endorsed by Alice
+--   {} %% {{Alice},{Bob}}                          Endorsed by both Alice *and* Bob 
+--                                                  (both privileges required to endorse)
+--   {} %% {{Alice,Bob}}                            Endorsed by one of Alice *or* Bob
+--                                                  (either privilege can endorse)
+--   {} %% {}            (i.e. True %% True)        Endorsed by everybody 
+--                                                  (lowest integrity label = most trusted)
 
 newtype CNF = CNF (Set (Set Principal))
               deriving (Eq, Ord, Show)
@@ -1006,7 +928,6 @@ instance Priv DCLabel DCPriv where
   -- of higher integrity. (Overall, closer to the bottom of the
   -- lattice.)
 
-
   canFlowToP (DCPrivTCB p) (DCLabel s1 i1) (DCLabel s2 i2) =
     (s2 `cAnd` p) `cImplies` s1 && (i1 `cAnd` p) `cImplies` i2
   -- Here the privilege is used to bypass the secrecy restrictions by
@@ -1018,8 +939,7 @@ instance PublicAction DCLabel where publicLabel = cTrue %% cTrue
 runDCExample :: (Show a) => LIO DCLabel a -> IO ()
 runDCExample = runExample
 
---
---
+------------
 
 cAlice       = cFromLists [["Alice"]]
 cBob         = cFromLists [["Bob"]]
@@ -1033,7 +953,7 @@ cAliceAndBobPriv = DCPrivTCB cAliceAndBob
 cAliceOrBobPriv  = DCPrivTCB cAliceOrBob  
 cCarlaOrDanPriv  = DCPrivTCB cCarlaOrDan  
 
--- First part, same as secExample0'
+-- (First part is same as secExample0')
 dcSecExample0 = runDCExample $ return
   [ (cAlice       %% cTrue) `canFlowTo` (cAliceAndBob %% cTrue) 
   , (cBob         %% cTrue) `canFlowTo` (cAliceAndBob %% cTrue) 
@@ -1046,7 +966,6 @@ dcSecExample0 = runDCExample $ return
   , (cAliceOrBob  %% cTrue) `canFlowTo` (cAliceAndBob %% cTrue) 
   , (cAliceOrBob  %% cTrue) `canFlowTo` (cTrue        %% cTrue) 
   ]
-  
 
 -- First part, same as secExample1'
 dcSecExample1 = runDCExample $ return
@@ -1059,7 +978,6 @@ dcSecExample1 = runDCExample $ return
   , canFlowToP cBobPriv   (cAliceOrBob %% cTrue)  (cTrue   %% cTrue) 
   ]
 
--- Same as trustExample2
 dcTrustExample0 = runDCExample $ return
   [ (cTrue %% cAlice     ) `canFlowTo` (cTrue %% cAliceOrBob  )   -- True
   , (cTrue %% cBob       ) `canFlowTo` (cTrue %% cAliceOrBob  )   -- True
@@ -1075,7 +993,6 @@ dcTrustExample0 = runDCExample $ return
   , (cTrue %% cBob  )       `canFlowTo` (cTrue %% cAliceAndBob)   -- False
   ]
 
--- First part, same as trustExample3 
 dcTrustExample1 = runDCExample $ return
   [ canFlowToP cAlicePriv      (cTrue %% cAliceOrBob) (cTrue %% cAlice      ) -- True
   , canFlowToP cBobPriv        (cTrue %% cAliceOrBob) (cTrue %% cBob        ) -- True
@@ -1113,9 +1030,11 @@ dcSecExample9 = runDCExample $ do
     putStrLnP cBobPriv $ "Bob: " ++ s
   -- Eve thread:
   forkLIO $ do
-    putStrLnP NoPriv $ "Eve: I'm about to read the secret... " 
+    putStrLn "Eve: I'm about to read the secret... " 
     s <- queryDB db "alice"
-    putStrLnP NoPriv $ "Eve: " ++ s      -- Fails
+    putStrLn $ "Eve: " ++ s      -- Fails
+
+-- However...
 
 dcSecExample9' = runDCExample $ do
   db <- newLMVarP NoPriv publicLabel $ Map.empty
@@ -1129,23 +1048,32 @@ dcSecExample9' = runDCExample $ do
   -- First bob thread:
   forkLIO $ do
     updateDB db "bob" (cBob %% cTrue) "Bob's even bigger secret"
-    updateDB db "alice" (cAlice %% cTrue) "Launch at dawn"
+    updateDB db "alice" (cAlice %% cTrue) "Launch at dawn"  -- Succeeds :-(
   -- Second bob thread:
   forkLIO $ do
     s <- queryDB db "bob"
     putStrLnP cBobPriv $ "Bob: " ++ s
   -- Eve thread:
   forkLIO $ do
-    putStrLnP NoPriv $ "Eve: I'm about to read the secret... " 
+    putStrLn "Eve: I'm about to read the secret... " 
     s <- queryDB db "alice"
-    putStrLnP NoPriv $ "Eve: " ++ s      -- Fails
+    putStrLn $ "Eve: " ++ s      -- Fails
   -- Third  alice thread:
   forkLIO $ do
     s <- queryDB db "alice"
     putStrLnP cAlicePriv $ "Alice: " ++ s
 
--- This shows that we have secrecy since Eve cannot leak the data, but
--- no integrity: Bob corrupted Alice's DB cell.
+-- The above shows that we have secrecy (since Eve cannot leak the
+-- data), but no integrity: Bob gets to corrupt Alice's DB cell!
+-- Let's fix this...
+
+updateDBP :: Priv l p => 
+               p -> LMVar l (DB l) -> Principal -> l -> String -> LIO l ()
+updateDBP priv db prin l s = do
+  v <- labelP priv l s
+  m <- takeLMVarP priv db
+  putLMVarP priv db $ Map.insert prin v m
+-- (Now we could define updateDB = updateDBP NoPriv)
 
 dcSecExample9'' = runDCExample $ do
   db <- newLMVarP NoPriv publicLabel $ Map.empty
@@ -1159,27 +1087,20 @@ dcSecExample9'' = runDCExample $ do
   -- First bob thread:
   forkLIO $ do
     updateDBP cBobPriv db "bob" (cBob %% cBob) "Bob's even bigger secret"
-    -- In a real app we won't be able to specify a new label:
-    updateDB db "alice" (cAlice %% cAlice) "Launch at dawn" -- Fails
+    updateDB db "alice" (cAlice %% cAlice) "Launch at dawn"    -- Fails :-)
   -- Second bob thread:
   forkLIO $ do
     s <- queryDB db "bob"
     putStrLnP cBobPriv $ "Bob: " ++ s
   -- Eve thread:
   forkLIO $ do
-    putStrLnP NoPriv $ "Eve: I'm about to read the secret... " 
+    putStrLn "Eve: I'm about to read the secret... " 
     s <- queryDB db "alice"
-    putStrLnP NoPriv $ "Eve: " ++ s      -- Fails
-  -- Third  alice thread:
+    putStrLn $ "Eve: " ++ s                                    -- Fails :-)
+  -- Third alice thread:
   forkLIO $ do
     s <- queryDB db "alice"
     putStrLnP cAlicePriv $ "Alice: " ++ s
 
-
--- (but just gidcve examples with pure conjunction and pure disjunction)
-
--- A new version of the DB example with both secrecy and integrity?
-
-----------------------------------------------------------------------
-
 main = undefined
+
