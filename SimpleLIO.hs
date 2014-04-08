@@ -682,6 +682,7 @@ instance Priv TrustLabel TrustPriv where
     TrustLabel $ p `Set.union` s
 
 -- Note that the "public" label in this label model is the *highest* one
+-- Everything can flow to the "public" label.
 instance PublicAction TrustLabel where publicLabel = trustLabel []
 
 runTrustExample :: (Show a) => LIO TrustLabel a -> IO ()
@@ -691,8 +692,8 @@ mintTrustPrivTCB :: TrustLabel -> TrustPriv
 mintTrustPrivTCB (TrustLabel ps) = TrustPrivTCB ps
 
 -- Alice and Bob
-tAlice      = trustLabel [ "Alice" ]
-tBob        = trustLabel [ "Bob" ]
+tAlice       = trustLabel [ "Alice" ]
+tBob         = trustLabel [ "Bob" ]
 tAliceAndBob = trustLabel [ "Alice", "Bob" ]
 tCarlaAndDan = trustLabel [ "Carla", "Dan" ]
 
@@ -711,39 +712,43 @@ trustExample2 = runTrustExample $ return
   , tCarlaAndDan `canFlowTo` tAliceAndBob ] -- False
 
 trustExample3 = runTrustExample $ return
-  [ canFlowToP tAlicePriv      tAliceAndBob tAlice        -- True
-  , canFlowToP tBobPriv        tAliceAndBob tBob          -- True
-  , canFlowToP tBobPriv        tAlice      tBob           -- True
-  , canFlowToP tAlicePriv      tBob        tAlice         -- True
-  , canFlowToP tAlicePriv      tCarlaAndDan tAliceAndBob  -- False
+  [ canFlowToP tBobPriv         tAlice       tAliceAndBob -- True
+  , canFlowToP tAlicePriv       tBob         tAliceAndBob -- True
+  , canFlowToP tBobPriv         tAlice       tBob         -- True
+  , canFlowToP tAlicePriv       tBob         tAlice       -- True
+  , canFlowToP tAlicePriv       tCarlaAndDan tAliceAndBob -- False
   , canFlowToP tAliceAndBobPriv tCarlaAndDan tAliceAndBob -- True
   , canFlowToP tCarlaAndDanPriv tCarlaAndDan tAliceAndBob -- False 
   ]
 
 trustExample4 = runTrustExample $ do
-  ref <- newLIORef tAlice "w00t"
+  ref <- newLIORef tAlice "w00t"                -- Fails!
   readLIORef ref
 -- *** Exception: user error (write from TrustLabel (fromList []) to
 -- TrustLabel (fromList ["Alice"]) not allowed with privilege NoPriv)
 
--- "secret" is confusing
 trustExample5 = runTrustExample $ do
-  aliceSecret <- newLIORefP tAlicePriv tAlice ""   -- []
-  bobSecret   <- newLIORefP tBobPriv tBob ""       -- []
-  setLabelP tBobPriv tBob                          -- [Bob]
-  writeLIORef bobSecret "hey w00t w00t"
-  readLIORef aliceSecret                           -- []
+  aliceRef <- newLIORefP tAlicePriv tAlice ""   -- []
+  bobRef   <- newLIORefP tBobPriv tBob ""       -- []
+  setLabelP tBobPriv tBob                       -- [Bob]
+  writeLIORef bobRef "hey w00t w00t"
+  readLIORef aliceRef                           -- []
+  writeLIORef bobRef "I changed my mind..."     -- Fails!
+
+-- Above, we can't write to Bob's reference after reading from Alice's
+-- reference since the current computation is now less trustworthy.
+-- Bob's ref can only written by code that was influence by Bob.
 
 trustExample6 = runTrustExample $ do
-  aliceSecret <- newLIORefP tAlicePriv tAlice ""
+  aliceRef <- newLIORefP tAlicePriv tAlice ""
   -- as alice:
   do putStrLn "<alice<"
      secret <- getLine
-     writeLIORefP tAlicePriv aliceSecret secret
+     writeLIORefP tAlicePriv aliceRef secret
   -- as the messenger:
-  msg <- readLIORef aliceSecret
+  msg <- readLIORef aliceRef
   putStrLn $ "Intercepted message: " ++ show msg
-  writeLIORef aliceSecret $ msg ++ " p0wned!"  -- Fails here!
+  writeLIORef aliceRef $ msg ++ " p0wned!"  -- Fails here!
 
 -- Above, the messanger is able to intercept the message, but when it
 -- tries to update the reference with a new message (thus corrupting the
@@ -776,7 +781,7 @@ trustExample6 = runTrustExample $ do
 -- us some useful expressive power.  For example...
 --
 -- Secrecy:
---   {} %% {}            (i.e. True %% True)        Secret for nobody (i.e. public)
+--   {} %% {}            (i.e. True  %% True)       Secret for nobody (i.e. public)
 --   {{Alice}} %% {}     (i.e. Alice %% True)       Secret for Alice
 --   {{Alice},{Bob}} %% {}                          Secret for both Alice *and* Bob 
 --                                                  (both privileges required to declassify)
@@ -784,17 +789,19 @@ trustExample6 = runTrustExample $ do
 --                                                  (either privilege can declassify)
 --   {{}} %% {}          (i.e. False %% True)       Secret for *everybody* 
 --                                                  (highest secrecy label)
+--                                                  (no principal can declassify, though can use the all-powerful False privilege)
 --
 -- Integrity:
---   {} %% {}            (i.e. True %% True)        Endorsed by nobody
---                                                  (highest integrity label = least trusted)
+--   {} %% {}            (i.e. True %% True)        Not endorsed
+--                                                  (highest element in lattice = least trusted)
 --   {} %% {{Alice}}     (i.e. True %% Alice)       Endorsed by Alice
 --   {} %% {{Alice},{Bob}}                          Endorsed by both Alice *and* Bob 
 --                                                  (both privileges required to endorse)
 --   {} %% {{Alice,Bob}}                            Endorsed by one of Alice *or* Bob
 --                                                  (either privilege can endorse)
---   {} %% {{}}          (i.e. True %% False)       Endorsed by everybody 
---                                                  (lowest integrity label = most trusted)
+--   {} %% {{}}          (i.e. True %% False)       Endorsed by *everybody* 
+--                                                  (lowest element in lattice = most trusted)
+--                                                  (no principal can endorse, though can use the all-powerful False privilege)
 
 newtype CNF = CNF (Set (Set Principal))
               deriving (Eq, Ord, Show)
